@@ -14,6 +14,7 @@ Generate a `.devcontainer/devcontainer.json` optimized for Claude Code developme
 2. Gather the following parameters from the user:
    - **Username**: OS username inside the container (used for home directory path and common-utils)
    - **Dotfiles repository**: GitHub repository for dotfiles (e.g., `user/dotfiles`). Optional — skip dotfiles setup if not provided.
+   - **Dotfiles install command**: Script to run after cloning the dotfiles repository (default: `install.sh`). Ask only if dotfiles repository is provided. Optional — omit if using the default.
    - **SSH agent socket path**: Path to the SSH agent socket on the host (default: `/tmp/ssh-agent.sock`)
    - **Include AWS mount**: Whether to bind-mount `~/.aws` into the container (default: no)
    - **initializeCommand**: A host-side command to run before container creation (e.g., a script that ensures credential files exist). Optional — omit if not needed.
@@ -37,7 +38,7 @@ Generate a `.devcontainer/devcontainer.json` optimized for Claude Code developme
    .env.devcontainer.local
    ```
 
-8. Verify the generated configuration by running `devcontainer up --workspace-folder .` and confirm the container starts successfully. If it fails, diagnose the error (missing files for bind mounts, invalid feature versions, etc.), fix the generated `devcontainer.json`, and retry. Once verified, stop and remove the container.
+8. Verify the generated configuration by running `devcontainer up --workspace-folder . [--dotfiles-repository <dotfiles-repo>] [--dotfiles-install-command <command>]` (include these flags only if the user provided them) and confirm the container starts successfully. If it fails, diagnose the error (missing files for bind mounts, invalid feature versions, etc.), fix the generated `devcontainer.json`, and retry. Once verified, stop and remove the container.
 
 ## Template
 
@@ -76,13 +77,6 @@ Generate a `.devcontainer/devcontainer.json` optimized for Claude Code developme
 
 ### Conditional sections
 
-**If dotfiles repository is provided**, add:
-```json
-{
-  "dotfiles.repository": "<dotfiles-repo>"
-}
-```
-
 **If initializeCommand is provided**, add:
 ```json
 {
@@ -102,7 +96,7 @@ Generate a `.devcontainer/devcontainer.json` optimized for Claude Code developme
 
 ## Notes
 
-- When `dotfiles.repository` is set, the devcontainer runtime clones the repository and runs `install.sh` (if present) inside the container.
+- When a dotfiles repository is provided, pass it as `--dotfiles-repository <repo>` to `devcontainer up`. The devcontainer runtime clones the repository and runs `install.sh` by default. To use a different script, also pass `--dotfiles-install-command <command>`.
 - `initializeCommand` runs on the host before container creation. Typical uses: ensuring bind-mount target files exist, refreshing credentials, or pulling secrets.
 - The Claude Code credentials mount expects `~/.claude/.credentials-devcontainer.json` on the host. This is a separate credential file to avoid conflicts with the host's active session.
 - The `--security-opt label=disable` run arg is needed for SELinux/Podman environments to allow bind mounts.
