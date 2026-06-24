@@ -33,10 +33,11 @@ The skill will ask you for:
 |-----------|-------------|---------|
 | Username | OS username inside the container | — |
 | Dotfiles repository | GitHub repo for dotfiles (e.g., `user/dotfiles`) | none (optional) |
-| SSH agent socket path | Host path to SSH agent socket | `/tmp/ssh-agent.sock` |
+| SSH agent forwarding | Forward host SSH agent into container | yes (optional) |
+| SSH agent socket path | Host path to SSH agent socket (if forwarding enabled) | host `$SSH_AUTH_SOCK` if set, otherwise `/tmp/ssh-agent.sock` |
 | Include AWS mount | Bind-mount `~/.aws` into the container | no |
 | initializeCommand | Host-side command to run before container creation | none (optional) |
-| Timezone | Container timezone | `Asia/Tokyo` |
+| Timezone | Container timezone | host `$TZ` if set, otherwise `UTC` |
 
 ## Prerequisites
 

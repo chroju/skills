@@ -15,10 +15,11 @@ Generate a `.devcontainer/devcontainer.json` optimized for Claude Code developme
    - **Username**: OS username inside the container (used for home directory path and common-utils)
    - **Dotfiles repository**: GitHub repository for dotfiles (e.g., `user/dotfiles`). Optional — skip dotfiles setup if not provided.
    - **Dotfiles install command**: Script to run after cloning the dotfiles repository (default: `install.sh`). Ask only if dotfiles repository is provided. Optional — omit if using the default.
-   - **SSH agent socket path**: Path to the SSH agent socket on the host (default: `/tmp/ssh-agent.sock`)
+   - **SSH agent forwarding**: Whether to forward the host's SSH agent into the container (default: yes). If yes, also ask:
+     - **SSH agent socket path**: Path to the SSH agent socket on the host (suggest the host's `$SSH_AUTH_SOCK` if set, otherwise `/tmp/ssh-agent.sock`)
    - **Include AWS mount**: Whether to bind-mount `~/.aws` into the container (default: no)
    - **initializeCommand**: A host-side command to run before container creation (e.g., a script that ensures credential files exist). Optional — omit if not needed.
-   - **Timezone**: Container timezone (default: `Asia/Tokyo`)
+   - **Timezone**: Container timezone (suggest the host's `$TZ` if set, otherwise `UTC`)
 
 3. Resolve the latest version of each devcontainer feature before generating the file. For each feature in `ghcr.io/devcontainers/features/` and `ghcr.io/anthropics/devcontainer-features/`, query the GitHub Packages API to get the latest tag:
    ```
@@ -57,7 +58,6 @@ Generate a `.devcontainer/devcontainer.json` optimized for Claude Code developme
   },
   "mounts": [
     "source=${localEnv:HOME}/.ssh,target=/home/<username>/.ssh,type=bind,readonly",
-    "source=<ssh-agent-socket>,target=/home/<username>/.ssh-agent.sock,type=bind,relabel=shared",
     "source=${localEnv:HOME}/.claude/projects,target=/home/<username>/.claude/projects,type=bind",
     "source=${localEnv:HOME}/.claude/sessions,target=/home/<username>/.claude/sessions,type=bind",
     "source=${localEnv:HOME}/.claude/.credentials-devcontainer.json,target=/home/<username>/.claude/.credentials.json,type=bind",
@@ -84,6 +84,11 @@ Generate a `.devcontainer/devcontainer.json` optimized for Claude Code developme
 }
 ```
 
+**If SSH agent forwarding is enabled**, add to `mounts`:
+```json
+"source=<ssh-agent-socket>,target=/home/<username>/.ssh-agent.sock,type=bind,relabel=shared"
+```
+
 **If AWS mount is included**, add to `mounts`:
 ```json
 "source=${localEnv:HOME}/.aws,target=/home/<username>/.aws,type=bind"
@@ -99,4 +104,4 @@ Generate a `.devcontainer/devcontainer.json` optimized for Claude Code developme
 - When a dotfiles repository is provided, pass it as `--dotfiles-repository <repo>` to `devcontainer up`. The devcontainer runtime clones the repository and runs `install.sh` by default. To use a different script, also pass `--dotfiles-install-command <command>`.
 - `initializeCommand` runs on the host before container creation. Typical uses: ensuring bind-mount target files exist, refreshing credentials, or pulling secrets.
 - The Claude Code credentials mount expects `~/.claude/.credentials-devcontainer.json` on the host. This is a separate credential file to avoid conflicts with the host's active session.
-- The `--security-opt label=disable` run arg is needed for SELinux/Podman environments to allow bind mounts.
+- The `--security-opt label=disable` run arg is required for Podman and SELinux environments to allow bind mounts. It is harmless on Docker Desktop, so it is included unconditionally.
