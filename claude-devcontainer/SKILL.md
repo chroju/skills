@@ -21,9 +21,9 @@ Generate a `.devcontainer/devcontainer.json` optimized for Claude Code developme
    - **initializeCommand**: A host-side command to run before container creation (e.g., a script that ensures credential files exist). Optional — omit if not needed.
    - **Timezone**: Container timezone (suggest the host's `$TZ` if set, otherwise `UTC`)
 
-3. Resolve the latest version of each devcontainer feature before generating the file. For each feature in `ghcr.io/devcontainers/features/` and `ghcr.io/anthropics/devcontainer-features/`, query the GitHub Packages API to get the latest tag:
+3. Resolve the latest patch version of each devcontainer feature before generating the file. For each feature in `ghcr.io/devcontainers/features/` and `ghcr.io/anthropics/devcontainer-features/`, query the GitHub Packages API to get the latest tag pinned to the patch level (e.g., `2.5.9` not `2` or `2.5`):
    ```
-   gh api /orgs/<org>/packages/container/features%2F<feature-name>/versions --jq '.[0].metadata.container.tags | map(select(test("^[0-9]"))) | .[0]'
+   gh api /orgs/<org>/packages/container/features%2F<feature-name>/versions --jq '.[0].metadata.container.tags | map(select(test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))) | .[0]'
    ```
    Use the resolved versions in the generated JSON. Never use versions from this template without verifying they still exist.
 
