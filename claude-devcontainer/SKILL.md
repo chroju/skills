@@ -12,6 +12,7 @@ Generate a `.devcontainer/devcontainer.json` optimized for Claude Code developme
 1. Check if `.devcontainer/devcontainer.json` already exists. If so, ask the user whether to overwrite or skip.
 
 2. Gather the following parameters from the user:
+   - **Container runtime**: Container runtime command or path (docker / podman / nerdctl / custom path). Default: docker. The runtime must be a Docker-compatible CLI.
    - **Username**: OS username inside the container (used for home directory path and common-utils)
    - **Dotfiles repository**: GitHub repository for dotfiles (e.g., `user/dotfiles`). Optional — skip dotfiles setup if not provided.
    - **Dotfiles install command**: Script to run after cloning the dotfiles repository (default: `install.sh`). Ask only if dotfiles repository is provided. Optional — omit if using the default.
@@ -42,7 +43,7 @@ Generate a `.devcontainer/devcontainer.json` optimized for Claude Code developme
    .env.devcontainer.local
    ```
 
-8. Verify the generated configuration by running `devcontainer up --workspace-folder . [--dotfiles-repository <dotfiles-repo>] [--dotfiles-install-command <command>]` (include these flags only if the user provided them) and confirm the container starts successfully. If it fails, diagnose the error (missing files for bind mounts, invalid feature versions, etc.), fix the generated `devcontainer.json`, and retry. Once verified, stop and remove the container.
+8. Verify the generated configuration by running `devcontainer up --workspace-folder . [--docker-path <runtime>] [--dotfiles-repository <dotfiles-repo>] [--dotfiles-install-command <command>]` (include `--docker-path` only if a non-default runtime was selected; include dotfiles flags only if the user provided them) and confirm the container starts successfully. If it fails, diagnose the error (missing files for bind mounts, invalid feature versions, etc.), fix the generated `devcontainer.json`, and retry. Once verified, stop and remove the container.
 
 ## Template
 
@@ -120,7 +121,8 @@ Generate a `.devcontainer/devcontainer.json` optimized for Claude Code developme
 
 ## Prerequisites
 
-- Dev Containers CLI (`devcontainer` command) or a compatible runtime (VS Code Dev Containers extension, GitHub Codespaces, etc.) must be installed on the host.
+- Dev Containers CLI (`devcontainer` command) must be installed on the host.
+- A Docker-compatible container runtime (Docker, Podman, nerdctl, etc.) must be installed and accessible from the host.
 - Claude Code must be installed on the host (`~/.claude/` directory exists).
 
 ## Notes
@@ -129,3 +131,4 @@ Generate a `.devcontainer/devcontainer.json` optimized for Claude Code developme
 - `initializeCommand` runs on the host before container creation. Typical uses: ensuring bind-mount target files exist, refreshing credentials, or pulling secrets.
 - The Claude Code credentials mount expects `~/.claude/.credentials-devcontainer.json` on the host. This is a separate credential file to avoid conflicts with the host's active session.
 - The `--security-opt label=disable` run arg is required for Podman and SELinux environments to allow bind mounts. It is harmless on Docker Desktop, so it is included unconditionally.
+- This skill uses the Dev Containers CLI (`devcontainer` command) directly. For non-default container runtimes, specify the runtime via `--docker-path` at verification time. VS Code extension-specific settings (e.g., `dev.containers.dockerPath`) are outside the scope of this skill.
