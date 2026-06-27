@@ -20,6 +20,9 @@ Generate a `.devcontainer/devcontainer.json` optimized for Claude Code developme
    - **Include AWS mount**: Whether to bind-mount `~/.aws` into the container (default: no)
    - **initializeCommand**: A host-side command to run before container creation (e.g., a script that ensures credential files exist). Optional — omit if not needed.
    - **Timezone**: Container timezone (suggest the host's `$TZ` if set, otherwise `UTC`)
+   - **postCreateCommand**: A command to run inside the container after creation (e.g., `gh auth setup-git` for git credential helper). Optional — omit if not needed.
+   - **Include GPG mount**: Whether to bind-mount `~/.gnupg` into the container for GPG commit signing (default: no)
+   - **Forward ports**: Ports to forward from the container to the host (e.g., `3000, 8080`). Optional — omit if not needed.
 
 3. Resolve the latest patch version of each devcontainer feature before generating the file. For each feature in `ghcr.io/devcontainers/features/` and `ghcr.io/anthropics/devcontainer-features/`, query the GitHub Packages API to get the latest tag pinned to the patch level (e.g., `2.5.9` not `2` or `2.5`):
    ```
@@ -65,12 +68,15 @@ Generate a `.devcontainer/devcontainer.json` optimized for Claude Code developme
     "source=${localEnv:HOME}/.claude/history.jsonl,target=/home/<username>/.claude/history.jsonl,type=bind",
     "source=${localEnv:HOME}/.claude.devcontainer.json,target=/home/<username>/.claude.json,type=bind"
   ],
-  "remoteEnv": {
-    "TERM": "xterm-256color",
-    "COLORTERM": "truecolor",
+  "containerEnv": {
     "TZ": "<timezone>"
   },
+  "remoteEnv": {
+    "TERM": "xterm-256color",
+    "COLORTERM": "truecolor"
+  },
   "runArgs": ["--env-file", ".devcontainer/.env.devcontainer", "--security-opt", "label=disable"],
+  "init": true,
   "remoteUser": "<username>"
 }
 ```
@@ -84,6 +90,13 @@ Generate a `.devcontainer/devcontainer.json` optimized for Claude Code developme
 }
 ```
 
+**If postCreateCommand is provided**, add:
+```json
+{
+  "postCreateCommand": "<command>"
+}
+```
+
 **If SSH agent forwarding is enabled**, add to `mounts`:
 ```json
 "source=<ssh-agent-socket>,target=/home/<username>/.ssh-agent.sock,type=bind,relabel=shared"
@@ -92,6 +105,18 @@ Generate a `.devcontainer/devcontainer.json` optimized for Claude Code developme
 **If AWS mount is included**, add to `mounts`:
 ```json
 "source=${localEnv:HOME}/.aws,target=/home/<username>/.aws,type=bind"
+```
+
+**If GPG mount is included**, add to `mounts`:
+```json
+"source=${localEnv:HOME}/.gnupg,target=/home/<username>/.gnupg,type=bind"
+```
+
+**If forward ports are provided**, add:
+```json
+{
+  "forwardPorts": [3000, 8080]
+}
 ```
 
 ## Prerequisites
