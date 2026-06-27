@@ -60,7 +60,6 @@ Generate a `.devcontainer/devcontainer.json` optimized for Claude Code developme
     "ghcr.io/anthropics/devcontainer-features/claude-code:<latest>": {}
   },
   "mounts": [
-    "source=${localEnv:HOME}/.ssh,target=/home/<username>/.ssh,type=bind,readonly",
     "source=${localEnv:HOME}/.claude/projects,target=/home/<username>/.claude/projects,type=bind",
     "source=${localEnv:HOME}/.claude/sessions,target=/home/<username>/.claude/sessions,type=bind",
     "source=${localEnv:HOME}/.claude/.credentials-devcontainer.json,target=/home/<username>/.claude/.credentials.json,type=bind",
