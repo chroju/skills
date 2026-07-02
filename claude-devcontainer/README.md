@@ -36,7 +36,10 @@ The skill will ask you for:
 | SSH agent forwarding | Forward host SSH agent into container | yes (optional) |
 | SSH agent socket path | Host path to SSH agent socket (if forwarding enabled) | host `$SSH_AUTH_SOCK` if set, otherwise `/tmp/ssh-agent.sock` |
 | Include AWS mount | Bind-mount `~/.aws` into the container | no |
+| Include GPG mount | Bind-mount `~/.gnupg` into the container for GPG signing | no |
 | initializeCommand | Host-side command to run before container creation | none (optional) |
+| postCreateCommand | Command to run inside the container after creation (e.g., `gh auth setup-git`) | none (optional) |
+| Forward ports | Ports to forward from container to host | none (optional) |
 | Timezone | Container timezone | host `$TZ` if set, otherwise `UTC` |
 
 ## Prerequisites
