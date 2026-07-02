@@ -17,6 +17,7 @@ Generate a `.devcontainer/devcontainer.json` optimized for Claude Code developme
    - **Dotfiles install command**: Script to run after cloning the dotfiles repository (default: `install.sh`). Ask only if dotfiles repository is provided. Optional — omit if using the default.
    - **SSH agent forwarding**: Whether to forward the host's SSH agent into the container (default: yes). If yes, also ask:
      - **SSH agent socket path**: Path to the SSH agent socket on the host (suggest the host's `$SSH_AUTH_SOCK` if set, otherwise `/tmp/ssh-agent.sock`)
+     - **Note**: On macOS with Podman, Unix domain sockets cannot be directly bind-mounted into containers because the Podman VM's virtual filesystem (virtio-fs) does not support socket files. See the Notes section for the recommended workaround using `podman machine ssh -R`.
    - **Include AWS mount**: Whether to bind-mount `~/.aws` into the container (default: no)
    - **initializeCommand**: A host-side command to run before container creation (e.g., a script that ensures credential files exist). Optional — omit if not needed.
    - **Timezone**: Container timezone (suggest the host's `$TZ` if set, otherwise `UTC`)
@@ -105,3 +106,17 @@ Generate a `.devcontainer/devcontainer.json` optimized for Claude Code developme
 - `initializeCommand` runs on the host before container creation. Typical uses: ensuring bind-mount target files exist, refreshing credentials, or pulling secrets.
 - The Claude Code credentials mount expects `~/.claude/.credentials-devcontainer.json` on the host. This is a separate credential file to avoid conflicts with the host's active session.
 - The `--security-opt label=disable` run arg is required for Podman and SELinux environments to allow bind mounts. It is harmless on Docker Desktop, so it is included unconditionally.
+- **Podman on macOS: SSH agent socket forwarding** — Podman on macOS runs containers inside a Linux VM (Apple Hypervisor / QEMU). Unix domain sockets on the macOS host cannot be bind-mounted through the VM's virtual filesystem, resulting in `statfs: operation not supported`. The workaround is to use SSH remote forwarding to relay the socket into the VM:
+  1. In `initializeCommand`, run `podman machine ssh -- -R /tmp/ssh-agent.sock:"$SSH_AUTH_SOCK" -N &` to forward the host's SSH agent socket into the VM at `/tmp/ssh-agent.sock`.
+  2. In `mounts`, use `source=/tmp/ssh-agent.sock` (the VM-side path) instead of the macOS host socket path.
+  3. Write `SSH_AUTH_SOCK=/home/<username>/.ssh-agent.sock` to `.env.devcontainer` so the container picks it up.
+  4. Optionally wait for the socket to appear and set permissions:
+     ```bash
+     for i in $(seq 1 10); do
+         if podman machine ssh -- test -S /tmp/ssh-agent.sock 2>/dev/null; then
+             podman machine ssh -- chmod 777 /tmp/ssh-agent.sock
+             break
+         fi
+         sleep 1
+     done
+     ```
