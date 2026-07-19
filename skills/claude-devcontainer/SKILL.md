@@ -1,6 +1,7 @@
 ---
 name: claude-devcontainer
 description: Generate a devcontainer.json optimized for Claude Code development (dotfiles, credential sharing via bind mounts, SSH agent forwarding)
+license: MIT
 ---
 
 # Claude Devcontainer
