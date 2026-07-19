@@ -1,0 +1,22 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Bump commit SHAs in skills.txt to the head of the tracked branch",
+      "managerFilePatterns": ["/^skills\\.txt$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+) currentValue=(?<currentValue>\\S+)\\n\\S+[ \\t]+\\S+[ \\t]+(?<currentDigest>[0-9a-f]{40})"
+      ]
+    }
+  ],
+  "packageRules": [
+    {
+      "matchDatasources": ["git-refs"],
+      "groupName": "agent skills",
+      "commitMessageTopic": "agent skill {{depName}}",
+      "schedule": ["before 9am on monday"]
+    }
+  ]
+}

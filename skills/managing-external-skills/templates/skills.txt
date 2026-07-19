@@ -1,0 +1,11 @@
+# Declarative manifest of external Agent Skills
+# Format: <owner/repo> <path-in-repo> <40-char commit SHA>
+# The "# renovate:" comment on the line immediately above each entry
+# tells Renovate what to track. The SHA is bumped to the head of the
+# tracked branch via PRs.
+
+# renovate: datasource=git-refs depName=https://github.com/anthropics/skills currentValue=main
+anthropics/skills document-skills/docx 0000000000000000000000000000000000000000
+
+# renovate: datasource=git-refs depName=https://github.com/vercel-labs/agent-skills currentValue=main
+vercel-labs/agent-skills skills/react-best-practices 0000000000000000000000000000000000000000
