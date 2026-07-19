@@ -1,5 +1,5 @@
 # .github/workflows/sync-skills.yaml
-# Renovate only bumps the SHA in skills.txt, so on Renovate branches the
+# Renovate only bumps the SHA in skills.yaml, so on Renovate branches the
 # vendor job re-installs the vendored files (.claude/skills/) and pushes the
 # diff back to the PR. On all other PRs the verify job only checks that the
 # manifest and the vendored files are in sync.
@@ -11,7 +11,7 @@ name: sync-skills
 on:
   pull_request:
     paths:
-      - "skills.txt"
+      - "skills.yaml"
       - "install.sh"
       - ".claude/skills/**"
 
@@ -26,7 +26,7 @@ jobs:
         with:
           ref: ${{ github.head_ref }}
 
-      - name: Vendor skills per skills.txt
+      - name: Vendor skills per skills.yaml
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -35,7 +35,7 @@ jobs:
           if ! git diff --cached --quiet; then
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
-            git commit -m "chore: vendor skills per skills.txt"
+            git commit -m "chore: vendor skills per skills.yaml"
             git push
           fi
 

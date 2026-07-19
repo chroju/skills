@@ -4,10 +4,10 @@
   "customManagers": [
     {
       "customType": "regex",
-      "description": "Bump commit SHAs in skills.txt to the head of the tracked branch",
-      "managerFilePatterns": ["/^skills\\.txt$/"],
+      "description": "Bump commit SHAs in skills.yaml to the head of the tracked branch",
+      "managerFilePatterns": ["/^skills\\.yaml$/"],
       "matchStrings": [
-        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+) currentValue=(?<currentValue>\\S+)\\n\\S+[ \\t]+\\S+[ \\t]+(?<currentDigest>[0-9a-f]{40})"
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+) currentValue=(?<currentValue>\\S+)\\n\\s+sha: \"?(?<currentDigest>[0-9a-f]{40})\"?"
       ]
     }
   ],

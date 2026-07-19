@@ -1,0 +1,23 @@
+# Declarative manifest of external Agent Skills.
+#
+# Entry fields:
+#   repo:  <owner/name> on GitHub
+#   path:  skill directory inside that repo
+#   sha:   full 40-char commit SHA (pin)
+#   scope: project | user (optional, default: project)
+#          project -> ./.claude/skills/   (relative to this manifest)
+#          user    -> ~/.claude/skills/
+#
+# The "# renovate:" comment must sit DIRECTLY above the sha line it
+# updates; Renovate bumps the SHA to the head of the tracked branch.
+skills:
+  - repo: anthropics/skills
+    path: skills/skill-creator
+    # renovate: datasource=git-refs depName=https://github.com/anthropics/skills currentValue=main
+    sha: "0000000000000000000000000000000000000000"
+
+  - repo: vercel-labs/agent-skills
+    path: skills/react-best-practices
+    # renovate: datasource=git-refs depName=https://github.com/vercel-labs/agent-skills currentValue=main
+    sha: "0000000000000000000000000000000000000000"
+    scope: user
