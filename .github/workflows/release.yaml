@@ -1,0 +1,41 @@
+# Publishes the skill collection as a GitHub release via `gh skill publish`.
+# Versioning is repository-level semver; the MAJOR/MINOR/PATCH decision is
+# made by a human per the policy in README.md, then this workflow is run
+# manually with the chosen tag.
+name: release
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Semver tag to publish (e.g. v0.1.0). Bump per the README versioning policy."
+        required: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate tag format
+        run: |
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "error: version must be vX.Y.Z (got: $VERSION)" >&2
+            exit 1
+          fi
+          if git rev-parse "refs/tags/$VERSION" >/dev/null 2>&1 || gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$VERSION" >/dev/null 2>&1; then
+            echo "error: tag $VERSION already exists" >&2
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh skill publish --dry-run
+          gh skill publish --tag "$VERSION"

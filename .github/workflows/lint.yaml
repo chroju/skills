@@ -1,0 +1,32 @@
+name: lint
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  skill-format:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate skills against the Agent Skills spec
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh --version
+          gh skill publish --dry-run
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      # Style/info-level findings (SC2001, SC2012) are accepted; fail on warning+
+      - name: Lint shell scripts
+        run: |
+          find . -name '*.sh' -print0 | xargs -0 -r shellcheck -S warning
