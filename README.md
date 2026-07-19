@@ -12,9 +12,9 @@ gh skill install chroju/skills <skill-name>
 
 | Skill | Description |
 |-------|-------------|
-| [authoring-skills](./skills/authoring-skills/) | Review and author skills against Anthropic's best practices and this repository's house rules |
-| [claude-devcontainer](./skills/claude-devcontainer/) | Generate a devcontainer.json optimized for Claude Code development |
-| [managing-external-skills](./skills/managing-external-skills/) | Declarative vendoring of external skills via a SHA-pinned skills.txt |
+| [meta/authoring-skills](./skills/meta/authoring-skills/) | Review and author skills against Anthropic's best practices and this repository's house rules |
+| [meta/claude-devcontainer](./skills/meta/claude-devcontainer/) | Generate a devcontainer.json optimized for Claude Code development |
+| [meta/managing-external-skills](./skills/meta/managing-external-skills/) | Declarative vendoring of external skills via a SHA-pinned skills.txt |
 
 ## Versioning and releases
 
