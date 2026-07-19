@@ -1,12 +1,18 @@
 # CLAUDE.md
 
-Agent Skills collection following `gh skill` conventions
-(`skills/<name>/SKILL.md`). Versioning and release policy: [README.md](README.md).
+This is a distribution repository: Agent Skills under
+`skills/<scope>/<name>/` are the products, installed standalone into other
+environments via `gh skill install chroju/skills <name>`. Consumers receive
+only the skill directory — never this repository's README, CLAUDE.md, CI,
+or LICENSE file. Everything under `skills/` must therefore be portable and
+self-contained; repository-specific facts (scope taxonomy, CI, release
+policy) live outside `skills/`, here or in the README. Versioning and
+release policy: [README.md](README.md).
 
 ## Development policy
 
 - Before creating, reviewing, or editing any skill, read
-  [skills/authoring-skills/SKILL.md](skills/authoring-skills/SKILL.md) and
+  [skills/meta/authoring-skills/SKILL.md](skills/meta/authoring-skills/SKILL.md) and
   follow it. It defines the scope gate (apply at intake), house rules
   (English, bash-first scripts, `gh skill` as the baseline), and the TDD
   red → green workflow with subagents.
@@ -15,6 +21,9 @@ Agent Skills collection following `gh skill` conventions
   `shellcheck -S warning` on all shell scripts.
 - Use Conventional Commits with the skill name as scope
   (`feat(managing-external-skills): ...`) so release notes group per skill.
+- Directory scopes categorize skills; `meta/` holds skills about managing
+  skills and Claude Code tooling itself. When adding a skill, pick a
+  fitting existing scope or propose a new one to the user at intake.
 
 ## Releases
 

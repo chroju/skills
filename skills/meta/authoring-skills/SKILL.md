@@ -1,14 +1,14 @@
 ---
 name: authoring-skills
-description: Review, create, and improve Agent Skills against Anthropic's official best practices and this repository's house rules. Use whenever asked to write a new skill, review or evaluate an existing skill, check a skill against best practices, validate skill format with gh skill, or when editing any SKILL.md in this repository.
+description: Review, create, and improve Agent Skills against Anthropic's official best practices and shared house rules. Use whenever asked to write a new skill, review or evaluate an existing skill, check a skill against best practices, validate skill format with gh skill, or when editing any SKILL.md in a skills repository.
 license: MIT
 ---
 
 # Authoring Skills
 
-Conventions for skills in this repository. Claude already reviews general code
-quality well; this skill adds only what it cannot know: the live official
-checklist and this repository's house rules.
+Portable conventions for authoring Agent Skills in any skills repository.
+Claude already reviews general code quality well; this skill adds only what
+it cannot know: the live official checklist and the house rules below.
 
 ## Check against the live best-practices doc
 
@@ -23,13 +23,21 @@ matching freedom level to task fragility.
 
 ## House rules
 
-- **`gh skill` is the baseline**: this repository follows `gh skill`
-  conventions — skills live at `skills/<name>/SKILL.md` and the frontmatter
-  `name` matches the directory name. After creating or editing a skill,
+- **`gh skill` is the baseline**: skills live in one of `gh skill`'s
+  discovery layouts (`skills/<name>/SKILL.md` or
+  `skills/<scope>/<name>/SKILL.md`) and the frontmatter `name` matches the
+  skill directory name. Which layout and scope taxonomy a repository uses
+  is repository-specific — check its CLAUDE.md or README, and decide the
+  placement of a new skill at intake, as part of the scope gate. After creating or editing a skill,
   validate the format by running `gh skill publish --dry-run` at the
   repository root and resolve every error and warning it reports. The
   command is in preview; if its behavior looks off, recheck
   `gh skill publish --help`.
+- **Portability**: a skill is distributed as its directory alone and must
+  work standalone in any host environment. Never bake in facts about the
+  source repository — its structure, files outside the skill directory, or
+  its policies. Repository-specific guidance belongs in the host
+  repository's CLAUDE.md or README.
 - **Language**: write SKILL.md and bundled docs in English unless the user
   says otherwise.
 - **Scripts**: default to bash while the script stays thin (one file, simple
