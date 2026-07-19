@@ -12,4 +12,32 @@ gh skill install chroju/skills <skill-name>
 
 | Skill | Description |
 |-------|-------------|
-| [claude-devcontainer](./claude-devcontainer/) | Generate a devcontainer.json optimized for Claude Code development |
+| [authoring-skills](./skills/authoring-skills/) | Review and author skills against Anthropic's best practices and this repository's house rules |
+| [claude-devcontainer](./skills/claude-devcontainer/) | Generate a devcontainer.json optimized for Claude Code development |
+| [managing-external-skills](./skills/managing-external-skills/) | Declarative vendoring of external skills via a SHA-pinned skills.txt |
+
+## Versioning and releases
+
+Versions are collection-level, not per-skill. `gh skill publish` tags the
+whole repository (semver), and `skill@vX.Y.Z` / `--pin` resolve as git refs
+on the repository.
+
+- **MAJOR**: any skill is removed, renamed, or breaks its documented behavior
+- **MINOR**: a skill is added or gains a capability
+- **PATCH**: fixes and documentation changes
+
+"Which skill changed" is expressed in release notes, not in the version
+number: commits use Conventional Commits with the skill name as scope
+(`feat(claude-devcontainer): ...`), so auto-generated release notes read
+per skill.
+
+Coarse repository-level versioning is harmless here because `gh skill
+update` detects changes by comparing each skill directory's tree SHA —
+tagging a release never churns skills that did not change. Per-skill tags
+(`skill-name/v1.2.0`) are not used: `gh skill publish` does not produce
+them and the ecosystem does not consume them. The Agent Skills spec has no
+first-class `version` frontmatter field, so skills do not carry one.
+
+## License
+
+[MIT](LICENSE)
