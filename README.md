@@ -17,6 +17,7 @@ gh skill install chroju/skills <skill-name>
 | [meta/authoring-skills](./skills/meta/authoring-skills/) | Review and author skills against Anthropic's best practices and this repository's house rules |
 | [meta/claude-devcontainer](./skills/meta/claude-devcontainer/) | Generate a devcontainer.json optimized for Claude Code development |
 | [meta/managing-external-skills](./skills/meta/managing-external-skills/) | Declarative vendoring of external skills via a SHA-pinned skills.txt |
+| [meta/parallelizing-tasks](./skills/meta/parallelizing-tasks/) | Decompose large tasks and execute them with parallel subagents routed to cheaper models, with approval, verification, and escalation rules |
 
 ## Versioning and releases
 
