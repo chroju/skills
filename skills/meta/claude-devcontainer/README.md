@@ -21,9 +21,11 @@ In a Claude Code session:
 Generates a `.devcontainer/devcontainer.json` with:
 
 - Host credentials shared via bind mounts (SSH, AWS, Claude Code sessions/settings)
+- Your installed Claude Code skills (`~/.claude/skills`) bind-mounted read-only
 - Automatic dotfiles setup via your dotfiles repository
 - SSH agent forwarding for git commit signing (Podman compatible)
 - Project-specific devcontainer features (Node.js, Python, Go, etc.)
+- Verification command printed for you to run yourself (`devcontainer up`, with `--buildkit never` to avoid a Podman BuildKit bug)
 
 ## Parameters
 
