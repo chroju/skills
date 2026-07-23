@@ -45,7 +45,11 @@ Generate a `.devcontainer/devcontainer.json` optimized for Claude Code developme
    .env.devcontainer.local
    ```
 
-8. Verify the generated configuration by running `devcontainer up --workspace-folder . [--docker-path <runtime>] [--dotfiles-repository <dotfiles-repo>] [--dotfiles-install-command <command>]` (include `--docker-path` only if a non-default runtime was selected; include dotfiles flags only if the user provided them) and confirm the container starts successfully. If it fails, diagnose the error (missing files for bind mounts, invalid feature versions, etc.), fix the generated `devcontainer.json`, and retry. Once verified, stop and remove the container.
+8. Do not run `devcontainer up` yourself — automated verification frequently fails in ways that are hard to diagnose from inside the agent (interactive host-side auth prompts, network restrictions, long-running builds). Instead, present the user with the exact command to run:
+   ```
+   devcontainer up --workspace-folder . --buildkit never [--docker-path <runtime>] [--dotfiles-repository <dotfiles-repo>] [--dotfiles-install-command <command>]
+   ```
+   (include `--docker-path` only if a non-default runtime was selected; include dotfiles flags only if the user provided them). Ask the user to run it and confirm the container starts successfully, and to share any error output if it fails. Also provide the corresponding stop/remove command (e.g. `<runtime> stop <container>` / `<runtime> rm <container>`, or `devcontainer down` if supported by the installed CLI version) for them to run afterward.
 
 ## Template
 
@@ -67,6 +71,7 @@ Generate a `.devcontainer/devcontainer.json` optimized for Claude Code developme
     "source=${localEnv:HOME}/.claude/sessions,target=/home/<username>/.claude/sessions,type=bind",
     "source=${localEnv:HOME}/.claude/.credentials-devcontainer.json,target=/home/<username>/.claude/.credentials.json,type=bind",
     "source=${localEnv:HOME}/.claude/settings.json,target=/home/<username>/.claude/settings.json,type=bind,readonly",
+    "source=${localEnv:HOME}/.claude/skills,target=/home/<username>/.claude/skills,type=bind,readonly",
     "source=${localEnv:HOME}/.claude/history.jsonl,target=/home/<username>/.claude/history.jsonl,type=bind",
     "source=${localEnv:HOME}/.claude.devcontainer.json,target=/home/<username>/.claude.json,type=bind"
   ],
@@ -133,6 +138,7 @@ Generate a `.devcontainer/devcontainer.json` optimized for Claude Code developme
 - `initializeCommand` runs on the host before container creation. Typical uses: ensuring bind-mount target files exist, refreshing credentials, or pulling secrets.
 - The Claude Code credentials mount expects `~/.claude/.credentials-devcontainer.json` on the host. This is a separate credential file to avoid conflicts with the host's active session.
 - The `--security-opt label=disable` run arg is required for Podman and SELinux environments to allow bind mounts. It is harmless on Docker Desktop, so it is included unconditionally.
+- `devcontainer up` is always run with `--buildkit never`. BuildKit-based builds on Podman can corrupt bind-mounted directory permissions during the build (e.g. `/tmp` reset to `755`), as reported in [podman-container-tools/buildah#6503](https://github.com/podman-container-tools/buildah/issues/6503). Forcing the legacy builder avoids this. It is harmless on Docker, so it is included unconditionally regardless of runtime.
 - **Podman on macOS: SSH agent socket forwarding** — Podman on macOS runs containers inside a Linux VM (Apple Hypervisor / QEMU). Unix domain sockets on the macOS host cannot be bind-mounted through the VM's virtual filesystem, resulting in `statfs: operation not supported`. The workaround is to use SSH remote forwarding to relay the socket into the VM:
   1. In `initializeCommand`, run `podman machine ssh -- -R /tmp/ssh-agent.sock:"$SSH_AUTH_SOCK" -N &` to forward the host's SSH agent socket into the VM at `/tmp/ssh-agent.sock`.
   2. In `mounts`, use `source=/tmp/ssh-agent.sock` (the VM-side path) instead of the macOS host socket path.
