@@ -6,10 +6,13 @@
 #   project (default) -> ./.claude/skills/  (relative to this manifest)
 #   user              -> ~/.claude/skills/
 #
+# An entry with `bulk: true` treats `path` as a tree: every directory
+# under it containing a SKILL.md is installed as an individual skill.
+#
 # Usage:
 #   ./install-skills.sh              # vendor all entries
-#   ./install-skills.sh --check      # verify manifest matches disk; nonzero exit
-#                             # on drift (for CI)
+#   ./install-skills.sh --check      # verify manifest matches disk; nonzero
+#                                    # exit on drift (for CI)
 #
 # On CI runners (GITHUB_ACTIONS=true) user-scope entries are skipped:
 # the runner's $HOME is not the machine the entry targets.
@@ -42,20 +45,26 @@ fail=0
 tmp=""
 trap '[[ -n "$tmp" ]] && rm -rf "$tmp"' EXIT
 
-# Reject basename collisions within the same scope up front: such entries
-# would silently install to the same destination
-dupes="$(yq '.skills[] | (.scope // "project") + " " + (.path | split("/") | .[-1])' "$MANIFEST" | sort | uniq -d)"
+# Reject basename collisions between non-bulk entries in the same scope up
+# front: such entries would silently install to the same destination. Bulk
+# entries' skill names are only known after fetching, so those are checked
+# against $seen inside the loop instead.
+dupes="$(yq '.skills[] | select((.bulk // false) == false) | (.scope // "project") + " " + (.path | split("/") | .[-1])' "$MANIFEST" | sort | uniq -d)"
 if [[ -n "$dupes" ]]; then
   echo "error: basename collision in $MANIFEST (multiple entries install to the same directory):" >&2
   echo "$dupes" | sed 's/^/  - /' >&2
   exit 1
 fi
 
+seen=""              # "<scope> <name>" pairs claimed during this run
+declared_project=""  # project-scope skill names, for orphan detection
+
 for ((i = 0; i < count; i++)); do
   source="$(yq ".skills[$i].repo" "$MANIFEST")"
   path="$(yq ".skills[$i].path" "$MANIFEST")"
   sha="$(yq ".skills[$i].sha" "$MANIFEST")"
   scope="$(yq ".skills[$i].scope // \"project\"" "$MANIFEST")"
+  bulk="$(yq ".skills[$i].bulk // false" "$MANIFEST")"
 
   if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
     echo "error: SHA is not a 40-char commit hash: $source $path $sha" >&2
@@ -71,20 +80,8 @@ for ((i = 0; i < count; i++)); do
       ;;
   esac
 
-  name="$(basename "$path")"
-  dest="$dest_root/$name"
-
   if [[ "$scope" == "user" && "${GITHUB_ACTIONS:-}" == "true" ]]; then
-    echo "==> $name  ($source @ ${sha:0:7}, user scope) — skipped on CI"
-    continue
-  fi
-
-  echo "==> $name  ($source @ ${sha:0:7}, $scope scope)"
-
-  if [[ "$MODE" == "check" && "$scope" == "user" && ! -d "$dest" ]]; then
-    # A user-scope entry not installed on this machine is not drift;
-    # run install-skills.sh to install it.
-    echo "    skip: not installed at $dest"
+    echo "==> $source/$path  (@ ${sha:0:7}, user scope) — skipped on CI"
     continue
   fi
 
@@ -98,18 +95,54 @@ for ((i = 0; i < count; i++)); do
     exit 1
   fi
 
-  if [[ "$MODE" == "check" ]]; then
-    # Byte-compare the content at the declared SHA against what is on disk
-    if ! diff -r "$tmp/src/$path" "$dest" > /dev/null 2>&1; then
-      echo "    NG: $dest does not match the manifest (run install-skills.sh to update)" >&2
-      fail=1
-    else
-      echo "    OK"
+  skill_srcs=()
+  if [[ "$bulk" == "true" ]]; then
+    while IFS= read -r dir; do
+      skill_srcs+=("$dir")
+    done < <(find "$tmp/src/$path" -type f -name SKILL.md | sed 's|/SKILL\.md$||' | sort)
+    if [[ ${#skill_srcs[@]} -eq 0 ]]; then
+      echo "error: no SKILL.md found under $path in $source@${sha:0:7}" >&2
+      exit 1
     fi
   else
-    mkdir -p "$dest"
-    rsync -a --delete "$tmp/src/$path/" "$dest/"
+    skill_srcs=("$tmp/src/$path")
   fi
+
+  for src in "${skill_srcs[@]}"; do
+    name="$(basename "$src")"
+    dest="$dest_root/$name"
+
+    if grep -qxF "$scope $name" <<< "$seen"; then
+      echo "error: multiple entries install the $scope-scope skill '$name'" >&2
+      exit 1
+    fi
+    seen+="$scope $name"$'\n'
+    if [[ "$scope" == "project" ]]; then
+      declared_project+="$name"$'\n'
+    fi
+
+    echo "==> $name  ($source @ ${sha:0:7}, $scope scope)"
+
+    if [[ "$MODE" == "check" && "$scope" == "user" && ! -d "$dest" ]]; then
+      # A user-scope skill not installed on this machine is not drift;
+      # run install-skills.sh to install it.
+      echo "    skip: not installed at $dest"
+      continue
+    fi
+
+    if [[ "$MODE" == "check" ]]; then
+      # Byte-compare the content at the declared SHA against what is on disk
+      if ! diff -r "$src" "$dest" > /dev/null 2>&1; then
+        echo "    NG: $dest does not match the manifest (run install-skills.sh to update)" >&2
+        fail=1
+      else
+        echo "    OK"
+      fi
+    else
+      mkdir -p "$dest"
+      rsync -a --delete "$src/" "$dest/"
+    fi
+  done
 
   rm -rf "$tmp"
   tmp=""
@@ -117,8 +150,10 @@ done
 
 # Orphan detection, project scope only: ~/.claude/skills legitimately holds
 # skills managed by other means (hand-written, gh skill install), so only
-# the project directory is compared against the manifest
-declared="$(yq '.skills[] | select((.scope // "project") == "project") | .path | split("/") | .[-1]' "$MANIFEST" | sort)"
+# the project directory is compared against the manifest. Bulk entries'
+# names are collected while fetching, so this runs after the loop in both
+# modes.
+declared="$(printf '%s' "$declared_project" | sort)"
 if [[ -d "$PROJECT_DEST" ]]; then
   actual="$(ls -1 "$PROJECT_DEST" | sort)"
   orphans="$(comm -13 <(echo "$declared") <(echo "$actual") || true)"
