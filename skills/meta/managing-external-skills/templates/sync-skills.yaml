@@ -12,7 +12,7 @@ on:
   pull_request:
     paths:
       - "skills.yaml"
-      - "install.sh"
+      - "install-skills.sh"
       - ".claude/skills/**"
 
 jobs:
@@ -30,7 +30,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          ./install.sh
+          ./install-skills.sh
           git add .claude/skills
           if ! git diff --cached --quiet; then
             git config user.name "github-actions[bot]"
@@ -50,4 +50,4 @@ jobs:
       - name: Verify skills match manifest
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./install.sh --check
+        run: ./install-skills.sh --check

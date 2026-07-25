@@ -7,13 +7,18 @@
 #   user              -> ~/.claude/skills/
 #
 # Usage:
-#   ./install.sh              # vendor all entries
-#   ./install.sh --check      # verify manifest matches disk; nonzero exit
+#   ./install-skills.sh              # vendor all entries
+#   ./install-skills.sh --check      # verify manifest matches disk; nonzero exit
 #                             # on drift (for CI)
 #
 # On CI runners (GITHUB_ACTIONS=true) user-scope entries are skipped:
 # the runner's $HOME is not the machine the entry targets.
 set -euo pipefail
+
+# The manifest sits next to this script, and project-scope installs are
+# relative to it — operate from the script's own directory so invoking
+# this script from any working directory behaves the same.
+cd "$(dirname "${BASH_SOURCE[0]}")"
 
 MANIFEST="skills.yaml"
 PROJECT_DEST=".claude/skills"
@@ -78,7 +83,7 @@ for ((i = 0; i < count; i++)); do
 
   if [[ "$MODE" == "check" && "$scope" == "user" && ! -d "$dest" ]]; then
     # A user-scope entry not installed on this machine is not drift;
-    # run install.sh to install it.
+    # run install-skills.sh to install it.
     echo "    skip: not installed at $dest"
     continue
   fi
@@ -96,7 +101,7 @@ for ((i = 0; i < count; i++)); do
   if [[ "$MODE" == "check" ]]; then
     # Byte-compare the content at the declared SHA against what is on disk
     if ! diff -r "$tmp/src/$path" "$dest" > /dev/null 2>&1; then
-      echo "    NG: $dest does not match the manifest (run install.sh to update)" >&2
+      echo "    NG: $dest does not match the manifest (run install-skills.sh to update)" >&2
       fail=1
     else
       echo "    OK"
