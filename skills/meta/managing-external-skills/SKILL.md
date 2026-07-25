@@ -16,7 +16,7 @@ repository, or both patterns mixed in one file.
 
 | File | Role |
 |---|---|
-| `skills.yaml` | Dependency manifest: list of `{repo, path, sha, scope}` entries |
+| `skills.yaml` | Dependency manifest: list of `{repo, path, sha, scope, bulk}` entries |
 | `install-skills.sh` | Fetch tarball → extract subpath → install via `rsync --delete`. `--check` verifies integrity. Requires gh (authenticated), yq (mikefarah v4), tar, rsync. Canonical name — deployments may rename it (see below) |
 | `renovate.json` | Auto-bumps SHAs to the head of the tracked branch via the git-refs datasource |
 | `.github/workflows/sync-skills.yaml` | Re-vendors on Renovate PRs; runs `--check` on other PRs |
@@ -100,6 +100,12 @@ skills:
     # renovate: datasource=git-refs depName=https://github.com/anthropics/skills currentValue=main
     sha: "3f2a1b...full-40-char-sha"
     scope: user   # optional; project (default) or user
+  - repo: chroju/skills
+    path: skills
+    # renovate: datasource=git-refs depName=https://github.com/chroju/skills currentValue=main
+    sha: "3f2a1b...full-40-char-sha"
+    scope: user
+    bulk: true    # optional; install every skill found under path
 ```
 
 - **The renovate comment must sit directly above the `sha:` line it
@@ -109,6 +115,12 @@ skills:
 - Quote the sha (an all-digit sha would otherwise parse as a number).
 - `currentValue` is the branch to track (usually `main`), not a tag.
 - SHAs must be the full 40-character form. install-skills.sh rejects short SHAs.
+- `bulk: true` treats `path` as a tree: every directory under it
+  containing a SKILL.md installs as an individual skill (named by its
+  directory basename). Use it to track a whole skills repository with
+  one entry; `path` is then the common root (e.g. `skills`) rather than
+  a single skill directory. All skills of a bulk entry share one `scope`
+  and one pinned sha.
 
 ## Operations
 
@@ -123,7 +135,9 @@ skills:
    gh api "repos/OWNER/REPO/contents/PATH?ref=$sha" -q 'type'  # should print "dir"
    ```
 3. Decide the scope with the user if not obvious: shared across their
-   machine (`user`) or part of this repository (`project`).
+   machine (`user`) or part of this repository (`project`). When the
+   user wants most or all skills of a repository, prefer one
+   `bulk: true` entry over per-skill entries.
 4. Append the entry (renovate comment directly above `sha:`) to skills.yaml.
 5. Run the install-skills.sh next to that skills.yaml, by explicit path.
 6. **For project scope, commit skills.yaml and the `.claude/skills/` diff
@@ -147,7 +161,9 @@ gh api "repos/OWNER/REPO/git/ref/tags/TAG" -q .object.sha
 1. Delete the entry from skills.yaml.
 2. Remove the installed copy: `rm -rf .claude/skills/<name>` for project
    scope, `rm -rf ~/.claude/skills/<name>` for user scope (name is the
-   basename of the path).
+   basename of the path). For a bulk entry, remove every skill it
+   installed — list the names with the entry still in place by running
+   the installer's `--check` before step 1, or from the upstream tree.
 3. For a forgotten project-scope removal, install-skills.sh warns about the
    orphaned directory; user scope has no orphan detection, so step 2 is
    on you.
@@ -168,8 +184,14 @@ drift. CI runs the same check (project scope only).
 - **Basename collisions**: the install destination is
   `<scope-root>/<basename-of-path>`, so entries with the same basename in
   the same scope collide. install-skills.sh rejects colliding manifests with an
-  error. Before adding, check for a basename conflict with existing
-  entries; if one exists, report it and ask the user how to proceed.
+  error — up front for plain entries, at fetch time for bulk entries
+  (their skill names are only known after fetching). Before adding, check
+  for a basename conflict with existing entries; if one exists, report it
+  and ask the user how to proceed.
+- **Skills removed upstream from a bulk entry**: when a bump drops a
+  skill from the upstream tree, the installer does not delete the
+  previously installed copy. Project scope flags it via the orphan
+  warning; user scope stays silent — remove the stale directory by hand.
 - **Hand-written skills alongside vendored ones**: skills kept directly in
   `.claude/skills/` will show up in install-skills.sh's orphan warning. Never
   mistake them for removable vendored leftovers.
@@ -192,5 +214,6 @@ drift. CI runs the same check (project scope only).
 
 This mechanism is scheduled for retirement once `gh skill` supports a
 manifest/lock workflow. Each skills.yaml entry converts mechanically to
-`gh skill install OWNER/REPO NAME --pin SHA --scope <scope>`; write a
+`gh skill install OWNER/REPO NAME --pin SHA --scope <scope>` (a bulk
+entry converts to one such command per installed skill); write a
 migration script first, then delete the four files.
