@@ -24,28 +24,39 @@ Generate a `.devcontainer/devcontainer.json` optimized for Claude Code developme
    - **initializeCommand**: A host-side command to run before container creation (e.g., a script that ensures credential files exist). Optional — omit if not needed.
    - **Timezone**: Container timezone (suggest the host's `$TZ` if set, otherwise `UTC`)
    - **postCreateCommand**: A command to run inside the container after creation (e.g., `gh auth setup-git` for git credential helper). Optional — omit if not needed.
+     - **Note**: `gh auth setup-git` requires `gh` inside the container to be authenticated, and the host's `gh` credentials are not inherited by the container (see the Notes section). If the user wants it, ask which authentication method to use: `GH_TOKEN` auto-injection via `initializeCommand` (see step 3), running `gh auth login` manually inside the container after creation, or using SSH remotes and omitting postCreateCommand.
    - **Include GPG mount**: Whether to bind-mount `~/.gnupg` into the container for GPG commit signing (default: no)
    - **Forward ports**: Ports to forward from the container to the host (e.g., `3000, 8080`). Optional — omit if not needed.
 
-3. Resolve the latest patch version of each devcontainer feature before generating the file. For each feature in `ghcr.io/devcontainers/features/` and `ghcr.io/anthropics/devcontainer-features/`, query the GitHub Packages API to get the latest tag pinned to the patch level (e.g., `2.5.9` not `2` or `2.5`):
+3. If `GH_TOKEN` auto-injection was selected in step 2, use a script file for `initializeCommand` (e.g. `.devcontainer/initialize.sh`) and include the following in it, so that `.devcontainer/.env.devcontainer` is regenerated with a fresh token on every startup:
+   ```bash
+   ENV_FILE="$(cd "$(dirname "$0")" && pwd)/.env.devcontainer"
+   {
+       echo "SSH_AUTH_SOCK=/home/<username>/.ssh-agent.sock"   # only if SSH agent forwarding is enabled
+       echo "GH_TOKEN=$(gh auth token)"
+   } > "$ENV_FILE"
+   ```
+   The file is loaded via `--env-file` in runArgs, so `gh` inside the container authenticates with `GH_TOKEN` and `gh auth setup-git` succeeds without an interactive login. Do not write the token into `.env.devcontainer` yourself — generate it from `initializeCommand` (see Notes).
+
+4. Resolve the latest patch version of each devcontainer feature before generating the file. For each feature in `ghcr.io/devcontainers/features/` and `ghcr.io/anthropics/devcontainer-features/`, query the GitHub Packages API to get the latest tag pinned to the patch level (e.g., `2.5.9` not `2` or `2.5`):
    ```
    gh api /orgs/<org>/packages/container/features%2F<feature-name>/versions --jq '.[0].metadata.container.tags | map(select(test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))) | .[0]'
    ```
    Use the resolved versions in the generated JSON. Never use versions from this template without verifying they still exist.
 
-4. Create `.devcontainer/devcontainer.json` using the template below, substituting parameters and resolved versions. Set `name` to the current repository or directory name.
+5. Create `.devcontainer/devcontainer.json` using the template below, substituting parameters and resolved versions. Set `name` to the current repository or directory name.
 
-5. Ask the user which additional devcontainer features are needed for the project (e.g., Node.js, Python, Go, Terraform, AWS CLI). Look up the latest version for each and add them to the `features` section.
+6. Ask the user which additional devcontainer features are needed for the project (e.g., Node.js, Python, Go, Terraform, AWS CLI). Look up the latest version for each and add them to the `features` section.
 
-6. Create `.devcontainer/.env.devcontainer` as an empty file if it doesn't exist (required by `--env-file` in runArgs).
+7. Create `.devcontainer/.env.devcontainer` as an empty file if it doesn't exist (required by `--env-file` in runArgs).
 
-7. Create `.devcontainer/.gitignore` with the following content if it doesn't exist:
+8. Create `.devcontainer/.gitignore` with the following content if it doesn't exist:
    ```
    .env.devcontainer
    .env.devcontainer.local
    ```
 
-8. Do not run `devcontainer up` yourself — automated verification frequently fails in ways that are hard to diagnose from inside the agent (interactive host-side auth prompts, network restrictions, long-running builds). Instead, present the user with the exact command to run:
+9. Do not run `devcontainer up` yourself — automated verification frequently fails in ways that are hard to diagnose from inside the agent (interactive host-side auth prompts, network restrictions, long-running builds). Instead, present the user with the exact command to run:
    ```
    devcontainer up --workspace-folder . --buildkit never [--docker-path <runtime>] [--dotfiles-repository <dotfiles-repo>] [--dotfiles-install-command <command>]
    ```
@@ -153,4 +164,7 @@ Generate a `.devcontainer/devcontainer.json` optimized for Claude Code developme
          sleep 1
      done
      ```
+- **GitHub authentication inside the container** — the host's `gh` credentials are not inherited by the container. On macOS, `gh` stores its token in the system keychain, so even bind-mounting `~/.config/gh` does not carry the token into the container. Without in-container authentication, a `postCreateCommand` of `gh auth setup-git` fails with `You are not logged into any GitHub hosts`. The `GH_TOKEN` auto-injection in step 3 addresses this; its trade-off is that the token is written in plaintext to `.devcontainer/.env.devcontainer` (gitignored, but readable by anything with filesystem access).
+- `.env.devcontainer` should be generated by the `initializeCommand` script rather than written directly by Claude: depending on the user's Claude Code permission settings, direct writes to `.env*` files may be denied. Generating it host-side also keeps the token fresh on every startup.
+- `postCreateCommand` runs only when the container is created, not on every start. If it fails, or if the contents of the `--env-file` change, remove the container and recreate it with `devcontainer up` for the changes to take effect.
 - This skill uses the Dev Containers CLI (`devcontainer` command) directly. For non-default container runtimes, specify the runtime via `--docker-path` at verification time. VS Code extension-specific settings (e.g., `dev.containers.dockerPath`) are outside the scope of this skill.
