@@ -18,6 +18,7 @@ gh skill install chroju/skills <skill-name>
 | [meta/claude-devcontainer](./skills/meta/claude-devcontainer/) | Generate a devcontainer.json optimized for Claude Code development |
 | [meta/managing-external-skills](./skills/meta/managing-external-skills/) | Declarative vendoring of external skills via a SHA-pinned skills.txt |
 | [meta/parallelizing-tasks](./skills/meta/parallelizing-tasks/) | Decompose large tasks and execute them with parallel subagents routed to cheaper models, with approval, verification, and escalation rules |
+| [thinking/pitch-me](./skills/thinking/pitch-me/) | Divergent exploration session that widens the option space with neutral trade-offs and no recommendation — the counterpart to a convergent grilling session |
 
 ## Versioning and releases
 
