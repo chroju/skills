@@ -72,9 +72,36 @@ matching freedom level to task fragility.
   3. Green: rerun the same task prompts with the subagent instructed to
      read the skill file first. The prompts must exercise the task itself;
      asking the agent to recite or explain the skill's content always
-     passes and proves nothing.
+     passes and proves nothing. Score every green against the rubric
+     below and report the numbers alongside the verdict — "green" on its
+     own doesn't say whether it was clean or merely passable, and a
+     prompt that completes but only partly (some called-for steps
+     skipped, or padded with unrequested extra work) is not a clean
+     green even though it "passed".
   4. Iterate. Content that does not flip a red to green is unnecessary —
      cut it.
+  5. Expand to N prompts (5–10) and report a pass rate (e.g. "6/10
+     passed") instead of a single pass/fail when either: the prompts are
+     a trigger eval (a single query is too noisy a sample for trigger
+     precision — see below), or a 1–3 prompt round comes back split
+     (some pass, some fail) rather than cleanly red or green. A 1–3
+     prompt round that is cleanly red or green does not need expanding.
+- **Rubric for green quality**: judge every completed prompt — not just
+  ones that look sloppy — on two dimensions that a separate subagent can
+  measure objectively, without relying on its own judgment call of "is
+  this correct":
+  - **Coverage**: list the steps the content calls for and check off
+    which ones the transcript actually performed — report as a
+    fraction (e.g. "4/5 steps covered"), not a felt impression.
+  - **Concision**: compare length and tool-call count against the
+    baseline run (no skill, or pre-edit snapshot — see step 1) for the
+    same prompt; flag a green that is a fixed multiple longer (e.g.
+    >1.5x) or that adds tool calls the task didn't require.
+  Correctness (are the claims actually true) is deliberately left out
+  of this rubric — verifying it needs a domain-specific check (running
+  the code, diffing against a spec) that this skill cannot supply in
+  general, and a judge asked to score it without one is just relabeling
+  a subjective guess as a number.
 - **Trigger evals**: verify a description's trigger precision the same
   way — with observed red/green, not judgment calls. Build two query
   sets: should-trigger (realistic prompts this skill must catch) and
@@ -84,10 +111,13 @@ matching freedom level to task fragility.
   actually the right fit — since an unrelated negative can't fail and
   proves nothing. Phrase every query the way a real user would type it:
   concrete file paths, casual tone, typos, surrounding context — not a
-  clean restatement of the skill's own description.
+  clean restatement of the skill's own description. Use the pass-rate
+  expansion above: trigger precision on 1–3 queries is too noisy to
+  trust either way.
 - **Persist TDD prompts as a regression suite**: once a red/green round
-  closes, save the task prompts and their pass/fail assertions as JSON
-  outside the skill directory — a skill is distributed as its directory
+  closes, save the task prompts and their pass/fail assertions — or pass
+  rate and rubric scores, when the round used those — as JSON outside
+  the skill directory — a skill is distributed as its directory
   alone, so it must not carry its own eval fixtures (see Portability).
   Where exactly they live in the host repository is that repository's
   call; point to its README or CLAUDE.md for the path convention instead
