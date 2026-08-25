@@ -59,11 +59,15 @@ matching freedom level to task fragility.
   skill. Rejecting a misplaced request at intake is cheaper than
   discovering the mismatch in testing.
 - **TDD (red → green)**: verify skill behavior with subagents.
-  1. Red: give a subagent 1–3 representative task prompts WITHOUT the
-     proposed content and record the failure. The red must be observed,
-     never assumed. There is no "too small to test" exemption — if you
-     cannot construct a prompt that fails without the content, that is
-     the signal to cut the content, not to skip the test.
+  1. Red: give a subagent 1–3 representative task prompts and record the
+     failure. For a brand-new skill, the baseline is no skill at all. For
+     an improvement to an existing skill, the baseline is a pre-edit
+     snapshot of that skill (e.g. `cp -r` the skill directory aside before
+     editing) — comparing against "no skill" would also credit content
+     the skill already had, not the change under test. The red must be
+     observed, never assumed. There is no "too small to test" exemption —
+     if you cannot construct a prompt that fails against the baseline,
+     that is the signal to cut the content, not to skip the test.
   2. Write the minimal skill body that closes only the observed gaps.
   3. Green: rerun the same task prompts with the subagent instructed to
      read the skill file first. The prompts must exercise the task itself;
@@ -71,6 +75,30 @@ matching freedom level to task fragility.
      passes and proves nothing.
   4. Iterate. Content that does not flip a red to green is unnecessary —
      cut it.
+- **Trigger evals**: verify a description's trigger precision the same
+  way — with observed red/green, not judgment calls. Build two query
+  sets: should-trigger (realistic prompts this skill must catch) and
+  should-not-trigger (realistic prompts it must not catch). Spend the
+  should-not-trigger budget on near misses — prompts that share keywords
+  or domain with this skill but where a different skill or tool is
+  actually the right fit — since an unrelated negative can't fail and
+  proves nothing. Phrase every query the way a real user would type it:
+  concrete file paths, casual tone, typos, surrounding context — not a
+  clean restatement of the skill's own description.
+- **Persist TDD prompts as a regression suite**: once a red/green round
+  closes, save the task prompts and their pass/fail assertions as JSON
+  outside the skill directory — a skill is distributed as its directory
+  alone, so it must not carry its own eval fixtures (see Portability).
+  Where exactly they live in the host repository is that repository's
+  call; point to its README or CLAUDE.md for the path convention instead
+  of assuming one. Persisting turns a one-off red/green check into a
+  reusable suite for two purposes: (a) rerun it after a model update to
+  catch regressions in skills that used to pass; (b) rerun it with the
+  skill removed — if the no-skill baseline now passes on its own, that is
+  a signal the skill's content has been absorbed by the model and is a
+  candidate for trimming or removal. This is the same principle as
+  "content that does not flip a red to green is unnecessary — cut it,"
+  applied after the fact instead of at authoring time.
 
 ## Review procedure
 
