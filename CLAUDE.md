@@ -16,6 +16,9 @@ release policy: [README.md](README.md).
   follow it. It defines the scope gate (apply at intake), house rules
   (English, bash-first scripts, `gh skill` as the baseline), and the TDD
   red → green workflow with subagents.
+- This repository does not persist TDD prompts or results as a regression
+  suite. Run the red → green checks properly each time and report the
+  numbers in the PR; keep prompts and grades in scratch space only.
 - Run `gh skill publish --dry-run` at the repository root before
   committing skill changes. CI (`lint.yaml`) runs the same check plus
   `shellcheck -S warning` on all shell scripts.
