@@ -76,6 +76,9 @@ target has no OIDC support.
   <this-skill-dir>/scripts/setup-environment.sh <owner/repo> production SECRET_A SECRET_B
   ```
 
+  For a tag-triggered release, limit it to the tag pattern instead:
+  `setup-environment.sh --tag 'v*' <owner/repo> <environment> ...`.
+
   Move existing repository-level deploy secrets into the environment and
   delete the repository-level copies (`gh secret delete <NAME>`).
 - Private repository on the Free plan (environment secrets and branch
@@ -85,11 +88,12 @@ target has no OIDC support.
 
 ## Validate
 
-Always run the bundled validator on every workflow file you created or
-edited, fix what it reports, and rerun until it passes:
+Always run the bundled validator on every file you created or edited
+under `.github/` — workflows and `dependabot.yml` alike — fix what it
+reports, and rerun until it passes:
 
 ```bash
-<this-skill-dir>/scripts/validate.sh .github/workflows/<file>.yaml ...
+<this-skill-dir>/scripts/validate.sh .github/workflows/<file>.yaml .github/dependabot.yml ...
 ```
 
 It runs actionlint, zizmor (template injection, excessive permissions,
