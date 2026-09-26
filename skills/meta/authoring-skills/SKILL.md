@@ -57,7 +57,14 @@ matching freedom level to task fragility.
   that skill triggers; knowledge for a different moment (e.g. release
   policy in an authoring-time skill) belongs in the README or another
   skill. Rejecting a misplaced request at intake is cheaper than
-  discovering the mismatch in testing.
+  discovering the mismatch in testing. When asked for a new skill, also
+  ask whether it needs to be a skill at all. If the task runs the same
+  steps every time with no judgment calls, a plain script the user runs
+  directly (a package script, Makefile target, or shell alias) may be
+  enough, and a skill adds nothing but a trigger. Before drafting, offer
+  the user that option alongside the skill and let them choose — even
+  when you judge a skill the better fit (e.g. the user wants Claude to
+  run it). That judgment is the user's call, not yours.
 - **TDD (red → green)**: verify skill behavior with subagents.
   1. Red: give a subagent 1–3 representative task prompts and record the
      failure. For a brand-new skill, the baseline is no skill at all. For
