@@ -15,6 +15,7 @@ gh skill install chroju/skills <skill-name>
 | [engineering/driving-dev-workflow](./skills/engineering/driving-dev-workflow/) | Development task as requirements → design → red/green implementation → review → PR and CI, with explicit approval gates and subagent delegation |
 | [engineering/driving-git-workflow](./skills/engineering/driving-git-workflow/) | Git workflow from worktree-based branching through commits, PRs, CI fix loops, and merge with cleanup |
 | [engineering/managing-dependencies](./skills/engineering/managing-dependencies/) | Version selection, package vetting, and update-bot policy for third-party dependencies |
+| [engineering/setting-up-repositories](./skills/engineering/setting-up-repositories/) | Bring a new or unconfigured GitHub repository to a baseline: merge settings, default-branch ruleset, security features, AGENTS.md, mise.toml, release tooling |
 | [meta/authoring-skills](./skills/meta/authoring-skills/) | Review and author skills against Anthropic's best practices and this repository's house rules |
 | [meta/claude-devcontainer](./skills/meta/claude-devcontainer/) | Generate a devcontainer.json optimized for Claude Code development |
 | [meta/managing-external-skills](./skills/meta/managing-external-skills/) | Declarative vendoring of external skills via a SHA-pinned skills.txt |
