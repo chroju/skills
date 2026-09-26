@@ -15,12 +15,15 @@ gh skill install chroju/skills <skill-name>
 | [engineering/driving-dev-workflow](./skills/engineering/driving-dev-workflow/) | Development task as requirements → design → red/green implementation → review → PR and CI, with explicit approval gates and subagent delegation |
 | [engineering/driving-git-workflow](./skills/engineering/driving-git-workflow/) | Git workflow from worktree-based branching through commits, PRs, CI fix loops, and merge with cleanup |
 | [engineering/managing-dependencies](./skills/engineering/managing-dependencies/) | Version selection, package vetting, and update-bot policy for third-party dependencies |
-| [engineering/setting-up-repositories](./skills/engineering/setting-up-repositories/) | Bring a new or unconfigured GitHub repository to a baseline: merge settings, default-branch ruleset, security features, AGENTS.md, mise.toml, release tooling |
 | [engineering/writing-github-actions](./skills/engineering/writing-github-actions/) | Hardening and deploy rules for GitHub Actions workflows, with bundled validation (actionlint, zizmor, timeout/concurrency checks) and environment setup scripts |
 | [meta/authoring-skills](./skills/meta/authoring-skills/) | Review and author skills against Anthropic's best practices and this repository's house rules |
-| [meta/claude-devcontainer](./skills/meta/claude-devcontainer/) | Generate a devcontainer.json optimized for Claude Code development |
 | [meta/managing-external-skills](./skills/meta/managing-external-skills/) | Declarative vendoring of external skills via a SHA-pinned skills.txt |
 | [meta/parallelizing-tasks](./skills/meta/parallelizing-tasks/) | Decompose large tasks and execute them with parallel subagents routed to cheaper models, with approval, verification, and escalation rules |
+| [setup/claude-devcontainer](./skills/setup/claude-devcontainer/) | Generate a devcontainer.json optimized for Claude Code development |
+| [setup/setting-up-repositories](./skills/setup/setting-up-repositories/) | Bring a new or unconfigured GitHub repository to a baseline: merge settings, default-branch ruleset, security features, AGENTS.md, mise.toml, release tooling |
+
+Skills are grouped by directory scope — see [CLAUDE.md](CLAUDE.md) for the
+rule that decides which scope a skill belongs to.
 
 ## Versioning and releases
 
@@ -28,7 +31,11 @@ Versions are collection-level, not per-skill. `gh skill publish` tags the
 whole repository (semver), and `skill@vX.Y.Z` / `--pin` resolve as git refs
 on the repository.
 
-- **MAJOR**: any skill is removed, renamed, or breaks its documented behavior
+- **MAJOR**: any skill is removed, renamed, moved to another scope
+  directory, or breaks its documented behavior. A move changes the
+  skill's path, and `gh skill update` tracks installed skills by path: it
+  silently reports them as up to date afterwards, so the release notes
+  must tell users to reinstall (`gh skill install chroju/skills <name>`)
 - **MINOR**: a skill is added or gains a capability
 - **PATCH**: fixes and documentation changes
 
