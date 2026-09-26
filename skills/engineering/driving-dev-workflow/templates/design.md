@@ -24,11 +24,28 @@
 ## Verification plan
 
 <!-- One row per acceptance criterion. Tests in the repository's own style
-     if it has a framework; otherwise a reproducible command or procedure. -->
+     if it has a framework; otherwise a reproducible command or procedure.
+     Name the state the check runs in, not only the command: most missed
+     bugs live in the gap between the feature at rest and the feature after
+     the user has already done something. "Open the screen and read it" is
+     rarely the check. -->
 
-| Acceptance criterion | Check |
-| --- | --- |
-| <criterion> | <test file, command, or procedure> |
+| Acceptance criterion | State it is checked in | Check |
+| --- | --- | --- |
+| <criterion> | <what has already happened when it matters> | <test file, command, or procedure> |
+
+## Landing plan
+
+<!-- One pull request or several, and which acceptance criteria go in each.
+     Splittable means the first part can ship on its own — usually a design
+     choice, not a fact: adding a field beside an existing one splits,
+     replacing it does not. Past ~500 lines of production code (tests,
+     specs and fixtures excluded) decide explicitly, and write "does not
+     split, because …" if that is the answer. -->
+
+| PR | Criteria | Ships on its own because |
+| --- | --- | --- |
+|  |  |  |
 
 ## Work breakdown
 

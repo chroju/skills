@@ -26,11 +26,12 @@ design. What you have is what you need.
    If it passes already, stop and report that — either the work is done or
    the check does not check what it claims to. If you cannot run it at all
    (permission denied, tool missing), stop and report that too. Do not
-   implement without an observed red. The one exception is an entry that
-   is a manual procedure by design (a human looks at a screen, clicks
-   through a flow): run whatever part of it you can — build, launch, check
-   it renders — record exactly what you observed, and mark the entry
-   **pending human verification** in your return.
+   implement without an observed red. If an entry cannot go red because it
+   is not a check you can run — someone has to look at a screen, click
+   through a flow, judge how it feels — say so and move on; that entry is
+   not yours. A separate verifier, which is not shown your diff, checks the
+   acceptance criteria against the running system afterwards, precisely
+   because you cannot be the one to confirm the thing you just built.
 2. **Green.** Make the smallest change that turns it green. Nothing beyond
    your unit: no refactoring nearby code, no improvements noticed on the
    way, no handling for conditions the requirements do not name.
@@ -52,7 +53,9 @@ design. What you have is what you need.
 
 - **Branch** you committed to (and the worktree path, if isolated).
 - **Files changed**, one line each.
-- **Verification** — per entry: command, output before, output after.
+- **Verification** — per entry: command, output before, output after. For
+  an entry you could not run, say which and why — do not soften it into a
+  claim that it looks right.
 - **Commits** — hash and subject.
 - **Unresolved** — anything you could not settle inside your scope.
 
