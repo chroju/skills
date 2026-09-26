@@ -28,8 +28,8 @@ workflow is where it is most often skipped.
   deploy workflows a fixed group with `cancel-in-progress: false` (queue,
   never abort a deploy).
 
-Workflow files you did not need to touch: do not edit them. List the
-checklist items they miss in your report instead.
+Workflow files you did not need to touch: do not edit them. Run the
+validation below on them too and list their findings in your report.
 
 ## Deploys
 
@@ -68,19 +68,16 @@ target has no OIDC support.
 
 - Public repository, or private on a paid plan: put the deploy job in an
   environment (`environment: production`), store its secrets there, and
-  restrict deployment to the default branch:
+  restrict deployment to the default branch. Run the bundled script — it
+  creates the environment, limits it to the default branch, and prompts
+  for each secret:
 
   ```bash
-  gh api -X PUT repos/<repo>/environments/production --input - <<'EOF'
-  {"deployment_branch_policy": {"protected_branches": false, "custom_branch_policies": true}}
-  EOF
-  gh api -X POST repos/<repo>/environments/production/deployment-branch-policies \
-    -f name=<default-branch> -f type=branch
-  gh secret set <NAME> --env production
+  <this-skill-dir>/scripts/setup-environment.sh <owner/repo> production SECRET_A SECRET_B
   ```
 
   Move existing repository-level deploy secrets into the environment and
-  delete the repository-level copies.
+  delete the repository-level copies (`gh secret delete <NAME>`).
 - Private repository on the Free plan (environment secrets and branch
   policies unavailable): keep the deploy in its own workflow triggered
   only by `push` to the default branch (plus `workflow_dispatch` if
@@ -88,6 +85,19 @@ target has no OIDC support.
 
 ## Validate
 
-Run `actionlint` and `zizmor` on the changed files if they are installed
-and fix what they report. If either is missing, say in the report that
-it was skipped — do not substitute a generic YAML check silently.
+Always run the bundled validator on every workflow file you created or
+edited, fix what it reports, and rerun until it passes:
+
+```bash
+<this-skill-dir>/scripts/validate.sh .github/workflows/<file>.yaml ...
+```
+
+It runs actionlint, zizmor (template injection, excessive permissions,
+dangerous triggers, `secrets: inherit`, cache poisoning, and more) and
+`check-workflows.sh` (timeouts and concurrency, which the other two do
+not check). Missing tools are fetched for the run through `mise` or
+`uvx`; if the script cannot fetch them, report that validation did not
+run — never replace it with a plain YAML parse.
+
+When a zizmor finding is a deliberate choice, suppress that one line
+with `# zizmor: ignore[<rule>]` and state the reason in the report.
