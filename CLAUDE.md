@@ -24,9 +24,16 @@ release policy: [README.md](README.md).
   `shellcheck -S warning` on all shell scripts.
 - Use Conventional Commits with the skill name as scope
   (`feat(managing-external-skills): ...`) so release notes group per skill.
-- Directory scopes categorize skills; `meta/` holds skills about managing
-  skills and Claude Code tooling itself. When adding a skill, pick a
-  fitting existing scope or propose a new one to the user at intake.
+- Directory scopes categorize skills. Apply these rules in order and use
+  the first that fits:
+  1. `meta/` — how skills or agents themselves are handled: authoring or
+     managing skills, orchestrating subagents.
+  2. `setup/` — used once when preparing a project or its development
+     environment (repository baseline, devcontainer).
+  3. `engineering/` — everything else used repeatedly in day-to-day
+     development.
+  Decide the scope at intake. If none fits, propose a new one to the user.
+  Moving an existing skill between scopes is a MAJOR change (see README).
 
 ## Releases
 
