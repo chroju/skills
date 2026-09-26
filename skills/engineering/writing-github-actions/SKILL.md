@@ -49,13 +49,18 @@ Then remove the default-branch `push` trigger from the test workflow
 (keep its `pull_request` trigger) — the deploy workflow now runs the
 tests on that push, and keeping both runs them twice.
 
-Do not use `workflow_run` or `pull_request_target` for this — they run
-with the default branch's secrets on events you did not scope.
+Do not chain them with `workflow_run` (or `pull_request_target`): that
+splits test and deploy into separately triggered runs, while `needs`
+keeps both in one run on the same commit.
 
 **Credentials: OIDC first.** Check the deploy target's docs for GitHub
 OIDC federation (AWS, Google Cloud, Azure and others support it). If
 supported, use it (`id-token: write`) and scope the cloud-side trust to
-the environment (`sub` = `repo:<owner>/<repo>:environment:<name>`). If
+the environment through the `sub` claim. Check the repository's actual
+`sub` format before writing the trust policy: newer repositories (and
+ones that opted in) use immutable subjects with owner and repository IDs
+(`repo:<owner>@<owner-id>/<repo>@<repo-id>:...`) instead of
+`repo:<owner>/<repo>:...`. If
 not, use a narrowly scoped API token and state in the report that the
 target has no OIDC support.
 
