@@ -61,22 +61,29 @@ disable-model-invocation: true
 | Drift | a version, auto-mode-flag, or system-prompt difference — within the session, or vs. the previous session (facts' `Drift vs previous session`) | |
 | Wording | another finding's root cause is how an instruction is phrased (ambiguous, contradicts another instruction, buried, missing an example, a weak Skill description) | Evidence quotes the current text verbatim; Proposed change quotes the full replacement text verbatim |
 | Opportunity | repeated manual work, repeated permission waits, or a material that went unused or is redundant | |
-| Rework | the human had work redone or the approach changed, including the same mistake repeated | quote the point; may be unrelated to any harness material; consecutive messages making the same correction count as one point; cap at 5, the ones that caused the most rework — see Report format for the overflow line |
+| Rework | the human had work redone or the approach changed, including the same mistake repeated | quote the point; may be unrelated to any harness material; human messages with no assistant tool use or reply between them are one point, however different their wording — only messages the assistant actually acted or replied between are separate points; cap at 5, the ones that caused the most rework — see Report format for the overflow line |
 
 A **Rework** point is any human message — including an AskUserQuestion
 answer, whose preceding assistant text the facts show — that rejects,
 replaces, or declines what the assistant just proposed or did: an explicit
 correction, a counter-proposal, picking a non-recommended option, or
 asking to reconsider, after which the assistant redid or re-proposed.
+Describe only the redo the facts actually show — never invent a
+reimplementation, edit, or reply that isn't in them. Like every finding,
+a Rework finding still fills in all of summary, Evidence, Cause, Target,
+Proposed change, and confidence — Target is usually `none`, but Cause
+(why the redo happened) is never blank.
 
 **Target** is the harness material the finding is about — the resolved
 real path the facts already give for it (a CLAUDE.md, a Rule, a Skill's
 SKILL.md, a hook's settings file), or, only when no such material exists,
-a named non-file location (e.g. "Claude Code itself (release 2.1.283)",
-"this environment's network egress allowlist"); `none` only for a Workflow
-finding. Target names the material even when the fix itself is
-behavioral — e.g. a Non-compliance finding about a Rule that never loaded
-targets that Rule's file, never "the assistant's own behavior."
+a named non-file location, written in the report's language like every
+other value (e.g. "Claude Code itself (release 2.1.283)", "this
+environment's network egress allowlist" — see the translation example for
+their Japanese form); `none` only for a Workflow finding. Target names the
+material even when the fix itself is behavioral — e.g. a Non-compliance
+finding about a Rule that never loaded targets that Rule's file, never
+"the assistant's own behavior."
 
 ## Report format
 
@@ -167,3 +174,5 @@ everything below, not only section and issue-label names:
 | Non-application / Non-compliance / Drift / Wording / Opportunity / Rework | 未適用 / 不遵守 / 仕様変化 / 記述不備 / 改善余地 / 手戻り |
 | "not recorded" / "no previous session transcript" / "changed during session" | 「記録なし」/「直前のセッションの記録なし」/「セッション中に変化」 |
 | none (a field's value, e.g. Target for a Workflow finding) | なし |
+| "Claude Code itself (release 2.1.283)" (example named Target) | 「Claude Code 本体（リリース 2.1.283）」 |
+| "this environment's network egress allowlist" (example named Target) | 「この環境のネットワーク egress 許可リスト」 |
