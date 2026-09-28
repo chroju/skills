@@ -25,7 +25,6 @@ import hashlib
 import json
 import os
 import re
-import shlex
 import sys
 from pathlib import Path
 
@@ -339,213 +338,6 @@ def previous_session_id(index, current_id, current_first_ts):
 
 
 # ---------------------------------------------------------------------------
-# Glob / gitignore-style matching (paths: of a Rule)
-# ---------------------------------------------------------------------------
-
-def expand_braces(pattern):
-    m = re.search(r"\{([^{}]*)\}", pattern)
-    if not m:
-        return [pattern]
-    before, after = pattern[: m.start()], pattern[m.end():]
-    out = []
-    for opt in m.group(1).split(","):
-        out.extend(expand_braces(before + opt + after))
-    return out
-
-
-def split_top_level(s, sep=","):
-    """Split on `sep`, but never inside a {brace} group."""
-    parts = []
-    depth = 0
-    cur = []
-    for ch in s:
-        if ch == "{":
-            depth += 1
-            cur.append(ch)
-        elif ch == "}":
-            depth = max(0, depth - 1)
-            cur.append(ch)
-        elif ch == sep and depth == 0:
-            parts.append("".join(cur))
-            cur = []
-        else:
-            cur.append(ch)
-    parts.append("".join(cur))
-    return parts
-
-
-def _find_comment_start(s):
-    """Index of a `#` that opens a comment — at position 0, or preceded by
-    whitespace — or -1. A bare `#` glued onto other text is never one."""
-    for i, ch in enumerate(s):
-        if ch == "#" and (i == 0 or s[i - 1].isspace()):
-            return i
-    return -1
-
-
-def strip_trailing_comment(s):
-    """Drop a ` # comment` that starts outside quoting. Only a quote
-    character at the very start of the string opens real quoting here —
-    an apostrophe elsewhere (`don't`, `it's`) is just text, never treated
-    as opening an unterminated quote that swallows the rest of the line."""
-    if not s:
-        return s
-    head = ""
-    body = s
-    if s[0] in ("'", '"'):
-        quote = s[0]
-        end = s.find(quote, 1)
-        if end == -1:
-            return s  # unterminated quote: nothing safe to strip
-        head, body = s[: end + 1], s[end + 1 :]
-    idx = _find_comment_start(body)
-    if idx == -1:
-        return s
-    return (head + body[:idx]).rstrip()
-
-
-def clean_path_item(raw):
-    """One `paths:` entry: a quoted entry (`"a/**"  # c`, `'a/**' # c`)
-    keeps only its quoted content, discarding anything — comment or not —
-    after the closing quote; an unquoted entry has a trailing ` #
-    comment` stripped. Either way, a trailing `/**` is then dropped."""
-    s = raw.strip()
-    if not s:
-        return None
-    if s[0] in ('"', "'"):
-        quote = s[0]
-        end = s.find(quote, 1)
-        if end != -1:
-            s = s[1:end]
-    else:
-        s = strip_trailing_comment(s)
-    s = s.strip()
-    if s.endswith("/**"):
-        s = s[:-3]
-    return s or None
-
-
-def parse_paths_value(raw):
-    """A Rule's `paths:` frontmatter value into glob patterns: a YAML list
-    (items unquoted or quoted) or a comma-separated string (commas inside
-    {brace} groups do not split), each cleaned via clean_path_item()."""
-    if raw is None:
-        return []
-    if isinstance(raw, list):
-        out = []
-        for item in raw:
-            out.extend(parse_paths_value(item))
-        return out
-    s = strip_trailing_comment(str(raw).strip())
-    if not s:
-        return []
-    if s.startswith("[") and s.endswith("]"):
-        try:
-            data = json.loads(s)
-        except (json.JSONDecodeError, ValueError):
-            data = None
-        if isinstance(data, list):
-            out = []
-            for item in data:
-                cleaned = clean_path_item(str(item))
-                if cleaned:
-                    out.append(cleaned)
-            return out
-        s = s[1:-1]
-    elif len(s) >= 2 and ((s[0] == '"' and s[-1] == '"') or (s[0] == "'" and s[-1] == "'")):
-        # The whole value is one quoted scalar (`paths: "a/**, b/**"`):
-        # strip its outer quotes before splitting, so an embedded comma
-        # list survives instead of leaving stray quote characters behind.
-        s = s[1:-1]
-    out = []
-    for part in split_top_level(s, ","):
-        cleaned = clean_path_item(part)
-        if cleaned:
-            out.append(cleaned)
-    return out
-
-
-def glob_core_regex(pattern):
-    """Translate one glob segment string (no surrounding ^…$) to regex
-    source, supporting `**`, `*`, `?` and `[...]` character classes."""
-    i, n = 0, len(pattern)
-    out = []
-    while i < n:
-        c = pattern[i]
-        if c == "*":
-            if pattern[i : i + 3] == "**/":
-                out.append("(?:.*/)?")
-                i += 3
-                continue
-            if pattern[i : i + 2] == "**":
-                out.append(".*")
-                i += 2
-                continue
-            out.append("[^/]*")
-            i += 1
-            continue
-        if c == "?":
-            out.append("[^/]")
-            i += 1
-            continue
-        if c == "[":
-            j = i + 1
-            neg = False
-            if j < n and pattern[j] in "!^":
-                neg = True
-                j += 1
-            start_content = j
-            if j < n and pattern[j] == "]":
-                j += 1
-            while j < n and pattern[j] != "]":
-                j += 1
-            if j >= n:
-                out.append(re.escape(c))
-                i += 1
-                continue
-            content = pattern[start_content:j].replace("\\", "\\\\")
-            out.append("[" + ("^" if neg else "") + content + "]")
-            i = j + 1
-            continue
-        out.append(re.escape(c))
-        i += 1
-    return "".join(out)
-
-
-def pattern_to_regex(pattern):
-    """gitignore-style semantics: a pattern without a slash matches at any
-    depth; a bare literal name (no wildcard) also matches everything below
-    it, like a directory; a leading `/` anchors to the project root."""
-    anchored = pattern.startswith("/")
-    core = pattern[1:] if anchored else pattern
-    is_dir_pattern = core.endswith("/")
-    if is_dir_pattern:
-        core = core[:-1]
-    literal_no_wildcards = not any(ch in core for ch in "*?[")
-    body_has_slash = "/" in core
-    prefix = "" if (anchored or body_has_slash) else "(?:.*/)?"
-    core_regex = glob_core_regex(core)
-    if literal_no_wildcards or is_dir_pattern:
-        return f"^{prefix}{core_regex}(?:/.*)?$"
-    return f"^{prefix}{core_regex}$"
-
-
-def compile_patterns(raw_patterns):
-    compiled = []
-    for p in raw_patterns:
-        for expanded in expand_braces(p):
-            try:
-                compiled.append(re.compile(pattern_to_regex(expanded)))
-            except re.error:
-                continue
-    return compiled
-
-
-def path_matches(relpath_posix, compiled_patterns):
-    return any(c.match(relpath_posix) for c in compiled_patterns)
-
-
-# ---------------------------------------------------------------------------
 # Rule / nested CLAUDE.md discovery — followlinks, loop-guarded (a symlinked
 # rules subdirectory, or a symlinked nested project directory, is common)
 # ---------------------------------------------------------------------------
@@ -570,44 +362,42 @@ def walk_files_followlinks(base_dir, suffix):
     return sorted(found)
 
 
-def read_frontmatter(text):
+def raw_paths_text(text):
+    """The `paths:` frontmatter value exactly as written — a same-line
+    scalar/list/string, or block-list items joined with ", " — or None if
+    the key is absent (a rule with no `paths:` loads unconditionally at
+    startup). Not parsed or interpreted: what the model sees is what the
+    file says."""
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
-        return {}
+        return None
     body = []
     i = 1
     while i < len(lines) and lines[i].strip() != "---":
         body.append(lines[i])
         i += 1
-    meta = {}
     j = 0
     while j < len(body):
-        line = body[j]
-        m = re.match(r"^([A-Za-z0-9_-]+):\s*(.*)$", line)
+        m = re.match(r"^paths:\s*(.*)$", body[j])
         if m:
-            key, val = m.group(1), m.group(2).strip()
-            if val == "":
-                items = []
-                k = j + 1
-                while k < len(body):
-                    stripped = body[k].strip()
-                    if stripped == "" or stripped.startswith("#"):
-                        k += 1
-                        continue
-                    im = re.match(r"^\s*-\s+(.*)$", body[k])
-                    if not im:
-                        break
-                    items.append(im.group(1).strip())
+            val = m.group(1).strip()
+            if val:
+                return val
+            items = []
+            k = j + 1
+            while k < len(body):
+                stripped = body[k].strip()
+                if stripped == "" or stripped.startswith("#"):
                     k += 1
-                if items:
-                    meta[key] = items
-                    j = k
                     continue
-                meta[key] = val
-            else:
-                meta[key] = val
+                im = re.match(r"^\s*-\s+(.*)$", body[k])
+                if not im:
+                    break
+                items.append(im.group(1).strip())
+                k += 1
+            return ", ".join(items) if items else None
         j += 1
-    return meta
+    return None
 
 
 def find_rule_files(rules_dir):
@@ -634,30 +424,24 @@ def find_nested_claude_md(project_dir):
     return sorted(result)
 
 
-def materials_list(config_dir, project_dir):
-    materials = []
+def rules_list(config_dir, project_dir):
+    """Every Rule file found under either rules dir, with its `paths:`
+    value verbatim and, when the file was reached through a symlink, the
+    path it was discovered at alongside the resolved real path."""
+    rules = []
     for rules_dir in (config_dir / "rules", project_dir / ".claude" / "rules"):
         for f in find_rule_files(rules_dir):
             try:
                 text = f.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
-            meta = read_frontmatter(text)
-            patterns = parse_paths_value(meta.get("paths"))
-            materials.append({
-                "kind": "rule",
-                "display": f,
-                "path": resolve_best_effort(f),
-                "patterns": patterns,
+            real = resolve_best_effort(f)
+            rules.append({
+                "path": real,
+                "raw_paths": raw_paths_text(text),
+                "link_note": f" (link: {f})" if str(real) != str(f) else "",
             })
-    for f in find_nested_claude_md(project_dir):
-        materials.append({
-            "kind": "nested_claude",
-            "display": f,
-            "path": resolve_best_effort(f),
-            "dir": resolve_best_effort(f.parent),
-        })
-    return materials
+    return rules
 
 
 # ---------------------------------------------------------------------------
@@ -671,97 +455,24 @@ def resolve_relative(fp, project_dir):
     return resolve_best_effort(p)
 
 
-def extract_path_tokens(cmd):
-    try:
-        tokens = shlex.split(cmd)
-    except ValueError:
-        tokens = cmd.split()
-    return [t for t in tokens if ("/" in t or "." in t) and not t.startswith("-")]
-
-
-def resolve_existing(tok, base_dir):
-    p = Path(tok)
-    if not p.is_absolute():
-        p = base_dir / p
-    try:
-        if p.exists():
-            return resolve_best_effort(p)
-    except OSError:
-        pass
-    return None
-
-
-def _parse_leading_cd_target(cmd):
-    """The directory argument of a leading `cd <dir> &&`/`cd <dir> ;`,
-    handling a quoted directory name (`cd "my dir" && ...`), or None."""
-    m = re.match(r"^\s*cd\s+", cmd)
-    if not m:
-        return None
-    rest = cmd[m.end():]
-    if rest[:1] in ("'", '"'):
-        quote = rest[0]
-        end = rest.find(quote, 1)
-        if end == -1:
-            return None
-        target = rest[1:end]
-        after = rest[end + 1 :].lstrip()
-    else:
-        # Stop at whitespace or a separator glued directly onto the
-        # target with no space (`cd dir;cmd`, `cd dir&&cmd`).
-        mm = re.match(r"([^\s;&|]+)", rest)
-        if not mm:
-            return None
-        target = mm.group(1)
-        after = rest[mm.end() :].lstrip()
-    if not (after.startswith("&&") or after.startswith(";")):
-        return None
-    return target
-
-
-def bash_effective_base_dir(cmd, project_dir):
-    """The directory a Bash command's relative paths resolve against: the
-    project dir, unless the command starts with `cd <dir> &&`/`cd <dir> ;`
-    (dir absolute, `~`-expanded, quoted, or itself relative to the
-    project dir), in which case it is that target."""
-    target = _parse_leading_cd_target(cmd)
-    if target is None:
-        return project_dir
-    target = os.path.expanduser(target)
-    p = Path(target)
-    if not p.is_absolute():
-        p = project_dir / p
-    return p
-
-
 def touched_files(records, project_dir):
+    """Files reached via Read/Edit/Write/MultiEdit/NotebookEdit — the
+    tools that trigger nested-instruction loading. Bash is not inspected:
+    the raw commands are listed separately (### Bash commands) and it is
+    the model's job to judge whether any of them touched a covered path."""
     touched = []
     for r, c in iter_tool_uses(records):
         name = c.get("name")
+        if name not in ("Read", "Edit", "Write", "MultiEdit", "NotebookEdit"):
+            continue
         inp = tool_input(c)
-        subagent = r.get("_subagent")
-        if name in ("Read", "Edit", "Write", "MultiEdit", "NotebookEdit"):
-            fp = inp.get("file_path") or inp.get("notebook_path")
-            if isinstance(fp, str) and fp:
-                touched.append({
-                    "real": resolve_relative(fp, project_dir),
-                    "how": f"{name}",
-                    "raw": fp,
-                    "subagent": subagent,
-                })
-        elif name == "Bash":
-            cmd = inp.get("command")
-            if not isinstance(cmd, str):
-                continue
-            base_dir = bash_effective_base_dir(cmd, project_dir)
-            for tok in extract_path_tokens(cmd):
-                real = resolve_existing(tok, base_dir)
-                if real:
-                    touched.append({
-                        "real": real,
-                        "how": f"Bash (`{line_excerpt(cmd, 120)}`)",
-                        "raw": tok,
-                        "subagent": subagent,
-                    })
+        fp = inp.get("file_path") or inp.get("notebook_path")
+        if isinstance(fp, str) and fp:
+            touched.append({
+                "real": resolve_relative(fp, project_dir),
+                "how": name,
+                "subagent": r.get("_subagent"),
+            })
     return touched
 
 
@@ -785,88 +496,40 @@ def claude_md_up_from(start_dir, stop_dirs):
     return found
 
 
-def external_claude_md_materials(touched, project_dir, config_dir):
-    """Nested-CLAUDE.md-style materials for touched files that fall
-    outside project_dir (already resolved): walk each one's directory
-    chain up to (not including) the user's home directory or the
-    filesystem root, skipping the config dir's own CLAUDE.md (user
-    memory, not a project material)."""
+def claude_md_files_for(touched, project_dir, config_dir):
+    """Nested CLAUDE.md under the project dir, plus CLAUDE.md in the
+    ancestor directories of touched (tool-reached) files, up to but not
+    including the user's home directory or the filesystem root — never
+    the config dir's own CLAUDE.md (user memory, not a project material).
+    Each is labelled inside or outside the project dir."""
     config_claude_md = resolve_best_effort(config_dir / "CLAUDE.md")
     stop_dirs = {resolve_best_effort(Path.home()), Path(project_dir.anchor)}
-    seen_paths = set()
-    materials = []
+    all_paths = set(resolve_best_effort(f) for f in find_nested_claude_md(project_dir))
     for t in touched:
-        real = t["real"]
+        all_paths.update(claude_md_up_from(t["real"].parent, stop_dirs))
+    all_paths.discard(config_claude_md)
+    result = []
+    for real in sorted(all_paths, key=str):
         try:
             real.relative_to(project_dir)
-            continue  # inside the project dir; handled by materials_list()
+            location = "inside project"
         except ValueError:
-            pass
-        for cand in claude_md_up_from(real.parent, stop_dirs):
-            if cand == config_claude_md or cand in seen_paths:
-                continue
-            seen_paths.add(cand)
-            materials.append({
-                "kind": "nested_claude",
-                "display": cand,
-                "path": cand,
-                "dir": cand.parent,
-                "outside_project": True,
-            })
-    return materials
+            location = "outside project dir"
+        result.append({"path": real, "location": location})
+    return result
 
 
-def load_record_paths(records):
-    paths = set()
-    for r in attachment_records(records, "nested_memory"):
-        p = r["attachment"].get("path")
-        if isinstance(p, str) and p:
-            paths.add(resolve_best_effort(p))
-    for r in attachment_records(records, "instructions"):
-        files = r["attachment"].get("files")
-        if not isinstance(files, list):
+def bash_commands_list(records):
+    """Every Bash command, verbatim — no extraction or interpretation.
+    Judging whether one touched a covered path is the model's job."""
+    out = []
+    for r, c in iter_tool_uses(records):
+        if c.get("name") != "Bash":
             continue
-        for f in files:
-            if not isinstance(f, dict):
-                continue
-            p = f.get("path")
-            if isinstance(p, str) and p:
-                paths.add(resolve_best_effort(p))
-    return paths
-
-
-def expected_not_loaded(main_records, combined_records, materials, project_dir, config_dir):
-    """main_records decides what was loaded (instructions/nested_memory);
-    combined_records (main session + any subagents) decides what was
-    touched — project_dir must already be resolved (item 9)."""
-    loaded = load_record_paths(main_records)
-    touched = touched_files(combined_records, project_dir)
-    all_materials = materials + external_claude_md_materials(touched, project_dir, config_dir)
-    findings = []
-    for mat in all_materials:
-        if mat["path"] in loaded:
-            continue
-        matches = []
-        if mat["kind"] == "rule":
-            if not mat["patterns"]:
-                continue
-            compiled = compile_patterns(mat["patterns"])
-            for t in touched:
-                try:
-                    rel = t["real"].relative_to(project_dir).as_posix()
-                except ValueError:
-                    continue
-                if path_matches(rel, compiled):
-                    matches.append(t)
-        else:
-            dirstr = str(mat["dir"])
-            for t in touched:
-                ts = str(t["real"])
-                if ts == dirstr or ts.startswith(dirstr + os.sep):
-                    matches.append(t)
-        if matches:
-            findings.append({"material": mat, "touches": matches})
-    return findings
+        cmd = tool_input(c).get("command")
+        if isinstance(cmd, str) and cmd:
+            out.append({"command": cmd, "timestamp": r.get("timestamp"), "subagent": r.get("_subagent")})
+    return out
 
 
 def tool_use_counts(records):
@@ -1285,29 +948,50 @@ def render_hooks(combined_records, hook_entries):
     return lines, errs, no_run
 
 
-def render_instruction_coverage(records, combined_records, materials, project_dir, config_dir):
-    lines = ["## Instruction coverage", ""]
-    findings = expected_not_loaded(records, combined_records, materials, project_dir, config_dir)
-    if not materials:
-        lines.append("- no Rules or nested CLAUDE.md found")
-    else:
-        for mat in materials:
-            kind = "Rule" if mat["kind"] == "rule" else "nested CLAUDE.md"
-            lines.append(f"- {kind}: `{mat['path']}`")
-    lines.append("")
-    lines.append("### Expected but not loaded")
-    if findings:
-        for f in findings:
-            mat = f["material"]
-            kind = "Rule" if mat["kind"] == "rule" else "nested CLAUDE.md"
-            suffix = " (outside project dir)" if mat.get("outside_project") else ""
-            lines.append(f"- {kind} `{mat['path']}`{suffix}: expected but not loaded")
-            for t in f["touches"]:
-                lines.append(f"  - touched: `{line_excerpt(t['raw'], 200)}` via {t['how']}{subagent_suffix(t.get('subagent'))}")
+def render_instruction_materials(combined_records, rules, project_dir, config_dir):
+    """The raw material a model needs to judge instruction coverage
+    itself — this script makes no judgment: no matching, no "not
+    loaded" verdict. See design.md, "Shrink"."""
+    lines = ["## Instruction materials", ""]
+
+    lines.append("### Rules")
+    if rules:
+        for r in rules:
+            paths_text = r["raw_paths"] if r["raw_paths"] else "none (loads at startup)"
+            lines.append(f"- `{r['path']}`{r['link_note']} — paths: {line_excerpt(paths_text, 300)}")
     else:
         lines.append("- none")
     lines.append("")
-    return lines, findings
+
+    touched = touched_files(combined_records, project_dir)
+
+    lines.append("### CLAUDE.md files")
+    claude_files = claude_md_files_for(touched, project_dir, config_dir)
+    if claude_files:
+        for cf in claude_files:
+            lines.append(f"- `{cf['path']}` ({cf['location']})")
+    else:
+        lines.append("- none")
+    lines.append("")
+
+    lines.append("### Touched files")
+    if touched:
+        for t in touched:
+            lines.append(f"- `{t['real']}` via {t['how']}{subagent_suffix(t.get('subagent'))}")
+    else:
+        lines.append("- none")
+    lines.append("")
+
+    lines.append("### Bash commands")
+    bash_cmds = bash_commands_list(combined_records)
+    if bash_cmds:
+        for b in bash_cmds:
+            lines.append(f"- {fmt_dt(parse_ts(b['timestamp']))}: `{line_excerpt(b['command'], 200)}`{subagent_suffix(b.get('subagent'))}")
+    else:
+        lines.append("- none")
+    lines.append("")
+
+    return lines
 
 
 # Whole-message harness tags: a `type:"user"` string record made up only of
@@ -1493,7 +1177,7 @@ def render_not_obtained(records):
 # ---------------------------------------------------------------------------
 
 def render_session(session_id, records, transcript_path, session_dir, project_dir, config_dir,
-                    hook_entries, materials, prev_id, prev_records):
+                    hook_entries, rules, prev_id, prev_records):
     subagent_records = load_subagent_records(session_dir, session_id)
     combined = records + subagent_records
 
@@ -1505,15 +1189,13 @@ def render_session(session_id, records, transcript_path, session_dir, project_di
     lines += render_tool_use(combined)
     hook_lines, errs, no_run = render_hooks(combined, hook_entries)
     lines += hook_lines
-    cov_lines, findings = render_instruction_coverage(records, combined, materials, project_dir, config_dir)
-    lines += cov_lines
+    lines += render_instruction_materials(combined, rules, project_dir, config_dir)
     lines += render_human_messages(records)
     lines += render_tool_errors(records)
     not_obtained_lines, missing = render_not_obtained(records)
     lines += not_obtained_lines
 
     facts = {
-        "expected_not_loaded": [str(f["material"]["path"]) for f in findings],
         "hook_errors": [single_line(f"{e.get('command') or e.get('hookName')}|{e.get('event')}") for e in errs],
         "hooks_no_run": [h["command"] for h in no_run],
     }
@@ -1526,7 +1208,6 @@ def render_cross_session(session_ids, per_session_facts):
     lines.append("")
 
     fact_labels = {
-        "expected_not_loaded": "Expected but not loaded",
         "hook_errors": "Hook error",
         "hooks_no_run": "Configured hooks with no run record",
     }
@@ -1598,10 +1279,10 @@ def main(argv=None):
     session_dir = transcript_path.parent
     recorded_cwd = first_string_field(anchor_records, "cwd")
     project_dir_raw = Path(recorded_cwd) if recorded_cwd else Path.cwd()
-    project_dir = resolve_best_effort(project_dir_raw)  # item 9: compare touches against the real path
+    project_dir = resolve_best_effort(project_dir_raw)  # compare touches against the real, symlink-resolved path
 
-    # One lightweight pass over every sibling transcript (item 14): never
-    # loads a sibling's full records just to learn its time span.
+    # One lightweight pass over every sibling transcript: never loads a
+    # sibling's full records just to learn its time span.
     index = build_session_index(session_dir)
     if args.session not in index:
         index[args.session] = {"path": transcript_path, "first": None, "last": None}
@@ -1635,7 +1316,7 @@ def main(argv=None):
 
     settings_list = load_settings_files(config_dir, project_dir)
     hook_entries = extract_hook_entries(settings_list)
-    materials = materials_list(config_dir, project_dir)
+    rules = rules_list(config_dir, project_dir)
 
     out = []
     env_lines, _absent = render_environment(config_dir, project_dir)
@@ -1650,7 +1331,7 @@ def main(argv=None):
         path = index.get(sid, {}).get("path") or (session_dir / f"{sid}.jsonl")
         session_lines, facts = render_session(
             sid, records, path, session_dir, project_dir, config_dir,
-            hook_entries, materials, prev_id, prev_records,
+            hook_entries, rules, prev_id, prev_records,
         )
         out += session_lines
         per_session_facts[sid] = facts
