@@ -40,19 +40,14 @@ disable-model-invocation: true
    verbatim into the report, don't paraphrase them.
 
 3. Decide the report's language: if any loaded instruction's text
-   specifies a response language, use it for the *whole* report — every
-   table header, field label, and fixed phrase, not just section and
-   issue-label names (see the translation example below). Otherwise use
-   the conversation's language. A quoted excerpt (Evidence, a "current
-   text"/"proposed text" pair) keeps its original wording either way —
-   translate the report around the quote, never the quote itself.
+   specifies a response language, use it for the *whole* report — the
+   title, every table header, field label, and fixed phrase, not just
+   section and issue-label names (see the translation example below).
+   Otherwise use the conversation's language.
 
 4. Turn the facts into findings using the table below. Every finding needs
    evidence: a quoted transcript excerpt or a named record (e.g. "hook_error
-   attachment, PostToolUse"). Skip anything you can't ground this way. For
-   Rework in particular, report *every* distinct point in the session where
-   work was redone or the approach changed — one finding per point, or one
-   finding quoting each — don't stop at the first one you find.
+   attachment, PostToolUse"). Skip anything you can't ground this way.
 
 5. Print the report below, then stop — do not write it to a file, open an
    editor, or post it anywhere.
@@ -62,22 +57,20 @@ disable-model-invocation: true
 | Label | Grounds it in | Notes |
 |---|---|---|
 | Non-application | facts' `Expected but not loaded`, `Hooks bypassed by Bash edits`, `Hook errors`, `Configured hooks with no run record` | name the hook command / material and the count where the facts give one |
-| Non-compliance | a human message that corrects the assistant on something a loaded instruction already covered | quote the instruction text and the human message |
-| Drift | a version, auto-mode-flag, or system-prompt difference — within the session, or vs. the previous session (facts' `Drift vs previous session`) | if there is no previous session transcript, say so instead of a finding |
+| Non-compliance | a human message that corrects the assistant on something a loaded instruction already covered | |
+| Drift | a version, auto-mode-flag, or system-prompt difference — within the session, or vs. the previous session (facts' `Drift vs previous session`) | |
 | Wording | another finding's root cause is how an instruction is phrased (ambiguous, contradicts another instruction, buried, missing an example, a weak Skill description) | Evidence quotes the current text verbatim; Proposed change quotes the full replacement text verbatim |
 | Opportunity | repeated manual work, repeated permission waits, or a material that went unused or is redundant | |
-| Rework | the human had work redone or the approach changed, including the same mistake repeated | quote the point; may be unrelated to any harness material; report every such point in the session, not only the first |
+| Rework | the human had work redone or the approach changed, including the same mistake repeated | quote the point; may be unrelated to any harness material; consecutive messages making the same correction count as one point; report at most 5 — the ones that caused the most rework — one finding per point; if more exist, add one line after the findings giving the count and timestamps of the rest |
 
-**Target** is the exact thing **Proposed change** would edit or act on —
-never a file the change doesn't actually touch. Use a real file path
-(resolved past any symlink) only when the proposed change is a text edit
-to that file. Otherwise name the non-file thing precisely: e.g. "Claude
-Code itself (release 2.1.283)" for a version or model-behavior issue,
-"network egress allowlist of this environment" for a blocked domain, "the
-assistant's own behavior in this conversation" for a plain slip with
-nothing else to point at. `none` is reserved for a Workflow finding —
-every Harness, Settings and hooks, Instructions, and Skills and commands
-finding must name a real target.
+**Target** is the harness material the finding is about — the resolved
+real path the facts already give for it (a CLAUDE.md, a Rule, a Skill's
+SKILL.md, a hook's settings file), or, only when no such material exists,
+a named non-file location (e.g. "Claude Code itself (release 2.1.283)",
+"this environment's network egress allowlist"); `none` only for a Workflow
+finding. Target names the material even when the fix itself is
+behavioral — e.g. a Non-compliance finding about a Rule that never loaded
+targets that Rule's file, never "the assistant's own behavior."
 
 ## Report format
 
@@ -110,14 +103,13 @@ and hooks, Instructions, Skills and commands, Workflow; print a heading
 only for a section that has at least one finding — a run with findings in
 two sections prints exactly those two headings, not all five. Workflow is
 the only section whose Target may be `none`. Number findings sequentially
-across the whole report. In a multi-session report, order findings within
-a section by session count descending, then confidence descending.
+across the whole report.
 
 The report always ends with exactly one or two lines — never more, never
 different ones, even when there are no findings:
 
 ```
-<one line handing the findings to the user — what to do with them is their call>
+<one line handing this off to the user, worded so it reads naturally with zero findings too — e.g. "What happens next, if anything, is your call.">
 <one line offering to turn this into an artifact — only if an artifact-publishing tool is available in this session, and only an offer: never publish unless asked>
 ```
 
@@ -147,6 +139,7 @@ everything below, not only section and issue-label names:
 
 | English | Japanese |
 | --- | --- |
+| ## Session retrospective (title) | ## セッションの振り返り |
 | Item / Value | 項目 / 値 |
 | Sessions | セッション |
 | Auto mode | 自動モード |
@@ -154,7 +147,8 @@ everything below, not only section and issue-label names:
 | Not obtained | 取得できなかった項目 |
 | Absent materials | 環境に存在しない材料 |
 | Evidence / Cause / Target / Proposed change | 根拠 / 原因 / 対象 / 提案する変更 |
-| Occurred in / confidence | 発生セッション数 / 確信度 |
+| Occurred in | 発生セッション数 |
+| confidence: high / medium / low | 確信度: 高 / 中 / 低 |
 | Harness / Settings and hooks / Instructions / Skills and commands / Workflow | ハーネス本体 / 設定・フック / Rules・CLAUDE.md / スキル・コマンド / 作業手順 |
 | Non-application / Non-compliance / Drift / Wording / Opportunity / Rework | 未適用 / 不遵守 / 仕様変化 / 記述不備 / 改善余地 / 手戻り |
 | "not recorded" / "no previous session transcript" / "changed during session" | 「記録なし」/「直前のセッションの記録なし」/「セッション中に変化」 |
