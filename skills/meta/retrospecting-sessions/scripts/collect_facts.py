@@ -2,16 +2,18 @@
 # collect_facts.py --session <id> [--days N] [--config-dir DIR]
 #
 # Reads one or more Claude Code session transcripts (JSONL under
-# <config-dir>/projects/*/<session-id>.jsonl) plus the harness materials
+# <config-dir>/projects/*/<session-id>.jsonl, plus that session's own
+# <session-id>/subagents/*.jsonl if present) and the harness materials
 # present in the running environment (settings.json, Rules, nested
 # CLAUDE.md files) and prints plain facts as Markdown to stdout. It makes
 # no judgments and writes nothing anywhere: no file is created or
 # modified, on this machine or elsewhere.
 #
-# --session <id>   the anchor session; with no --days, the only session
-#                   covered.
-# --days N         also cover every session of the same project whose
-#                   transcript's last record falls within the last N days.
+# --session <id>   the anchor session (matched literally, not as a glob);
+#                   with no --days, the only session covered.
+# --days N         a positive integer. Also cover every session of the
+#                   same project whose transcript's last record falls
+#                   within the last N days.
 # --config-dir DIR overrides $CLAUDE_CONFIG_DIR / ~/.claude.
 #
 # Exit codes: 0 success / 2 usage error / 3 transcript not found.
@@ -37,8 +39,6 @@ VENDOR_DIR_NAMES = {
 }
 
 USED_RECORD_KINDS = ["instructions", "auto_mode", "prompt_snapshot"]
-
-HOOK_ERROR_ATTACHMENT_TYPES = ("hook_non_blocking_error", "hook_blocking_error")
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +71,7 @@ def line_excerpt(value, limit):
 
 
 def parse_ts(s):
-    if not s:
+    if not isinstance(s, str) or not s:
         return None
     text = s[:-1] + "+00:00" if s.endswith("Z") else s
     try:
@@ -93,37 +93,73 @@ def fmt_dt(dt):
 def resolve_best_effort(p):
     try:
         return Path(p).resolve()
-    except OSError:
+    except (OSError, RuntimeError):
+        # RuntimeError: a symlink loop under Path.resolve()'s loop detection.
         return Path(p)
 
 
+def subagent_suffix(marker):
+    return f" (subagent: {marker})" if marker else ""
+
+
 # ---------------------------------------------------------------------------
-# Transcript loading
+# Record access — tolerant of any valid-JSON shape a line might hold
 # ---------------------------------------------------------------------------
 
-def load_jsonl(path):
-    records = []
-    with open(path, "r", encoding="utf-8", errors="replace") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                records.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
-    return records
+def message_content(r):
+    msg = r.get("message")
+    if not isinstance(msg, dict):
+        return None
+    return msg.get("content")
 
 
-def session_span(records):
-    parsed = [t for t in (parse_ts(r.get("timestamp")) for r in records) if t]
-    if not parsed:
-        return None, None
-    return min(parsed), max(parsed)
+def tool_input(c):
+    """Normalize a tool_use content item's `input` to a dict, tolerating a
+    malformed record where it is missing or not a dict (e.g. a string)."""
+    inp = c.get("input")
+    return inp if isinstance(inp, dict) else {}
+
+
+def iter_tool_uses(records):
+    """Yield (record, item) for every well-formed assistant tool_use
+    content item across `records`. The one iterator every tool-use-reading
+    fact (counts, Bash writes, touched files, Skill calls) is built on."""
+    for r in records:
+        if not isinstance(r, dict) or r.get("type") != "assistant":
+            continue
+        content = message_content(r)
+        if not isinstance(content, list):
+            continue
+        for c in content:
+            if isinstance(c, dict) and c.get("type") == "tool_use":
+                yield r, c
+
+
+def attachment_records(records, atype):
+    out = []
+    for r in records:
+        if not isinstance(r, dict) or r.get("type") != "attachment":
+            continue
+        att = r.get("attachment")
+        if isinstance(att, dict) and att.get("type") == atype:
+            out.append(r)
+    return out
+
+
+def tool_use_index(records):
+    """tool_use_id -> {"name": ..., "input": ...}"""
+    idx = {}
+    for r, c in iter_tool_uses(records):
+        tid = c.get("id")
+        if isinstance(tid, str) and tid:
+            idx[tid] = {"name": c.get("name"), "input": tool_input(c)}
+    return idx
 
 
 def first_field(records, field):
     for r in records:
+        if not isinstance(r, dict):
+            continue
         v = r.get(field)
         if v:
             return v
@@ -133,35 +169,95 @@ def first_field(records, field):
 def last_field(records, field):
     val = None
     for r in records:
+        if not isinstance(r, dict):
+            continue
         v = r.get(field)
         if v:
             val = v
     return val
 
 
-def attachment_records(records, atype):
+# ---------------------------------------------------------------------------
+# Transcript loading
+# ---------------------------------------------------------------------------
+
+def load_jsonl(path):
+    """Every line that parses as JSON but is not an object (null, a list,
+    a number, ...) is skipped: this script only ever deals in records."""
+    records = []
+    try:
+        fh = open(path, "r", encoding="utf-8", errors="replace")
+    except OSError:
+        return records
+    with fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(rec, dict):
+                records.append(rec)
+    return records
+
+
+def session_bounds(path):
+    """First/last record timestamp, read without keeping the parsed
+    records — the cheap pass used to scope --days and find a previous
+    session across possibly many sibling transcripts."""
+    first_ts = None
+    last_ts = None
+    try:
+        fh = open(path, "r", encoding="utf-8", errors="replace")
+    except OSError:
+        return None, None
+    with fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(rec, dict):
+                continue
+            ts = parse_ts(rec.get("timestamp"))
+            if ts is None:
+                continue
+            if first_ts is None or ts < first_ts:
+                first_ts = ts
+            if last_ts is None or ts > last_ts:
+                last_ts = ts
+    return first_ts, last_ts
+
+
+def session_span(records):
+    parsed = [t for t in (parse_ts(r.get("timestamp")) for r in records if isinstance(r, dict)) if t]
+    if not parsed:
+        return None, None
+    return min(parsed), max(parsed)
+
+
+def load_subagent_records(session_dir, session_id):
+    """Records from <session_dir>/<session_id>/subagents/*.jsonl, each
+    tagged with the subagent file's name so downstream facts can mark
+    where they came from."""
+    subdir = session_dir / session_id / "subagents"
+    if not subdir.is_dir():
+        return []
     out = []
-    for r in records:
-        if r.get("type") == "attachment":
-            att = r.get("attachment")
-            if isinstance(att, dict) and att.get("type") == atype:
-                out.append(r)
+    try:
+        files = sorted(subdir.glob("*.jsonl"))
+    except OSError:
+        return []
+    for f in files:
+        for r in load_jsonl(f):
+            r["_subagent"] = f.stem
+            out.append(r)
     return out
-
-
-def tool_use_index(records):
-    """tool_use_id -> {"name": ..., "input": ...}"""
-    idx = {}
-    for r in records:
-        if r.get("type") != "assistant":
-            continue
-        content = r.get("message", {}).get("content")
-        if not isinstance(content, list):
-            continue
-        for c in content:
-            if isinstance(c, dict) and c.get("type") == "tool_use" and c.get("id"):
-                idx[c["id"]] = {"name": c.get("name"), "input": c.get("input", {}) or {}}
-    return idx
 
 
 # ---------------------------------------------------------------------------
@@ -169,46 +265,58 @@ def tool_use_index(records):
 # ---------------------------------------------------------------------------
 
 def find_transcript(config_dir, session_id):
-    matches = sorted(config_dir.glob(f"projects/*/{session_id}.jsonl"))
-    return matches[0] if matches else None
+    """Literal match only — session_id is never treated as a glob."""
+    projects_dir = config_dir / "projects"
+    if not projects_dir.is_dir():
+        return None
+    try:
+        project_subdirs = sorted(p for p in projects_dir.iterdir() if p.is_dir())
+    except OSError:
+        return None
+    for proj_dir in project_subdirs:
+        candidate = proj_dir / f"{session_id}.jsonl"
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def discover_session_files(session_dir):
-    return sorted(session_dir.glob("*.jsonl"))
+    try:
+        return sorted(session_dir.glob("*.jsonl"))
+    except OSError:
+        return []
 
 
-def sessions_within_days(session_dir, days, now=None):
-    now = now or datetime.datetime.now(datetime.timezone.utc)
-    ids = []
+def build_session_index(session_dir):
+    """One lightweight pass per sibling transcript: {id: {path, first,
+    last}}. Never holds more than one file's parsed records at a time."""
+    index = {}
     for jf in discover_session_files(session_dir):
-        records = load_jsonl(jf)
-        _, last_ts = session_span(records)
-        if last_ts is not None and (now - last_ts) <= datetime.timedelta(days=days):
-            ids.append(jf.stem)
-    return ids
+        first_ts, last_ts = session_bounds(jf)
+        index[jf.stem] = {"path": jf, "first": first_ts, "last": last_ts}
+    return index
 
 
-def find_previous_session(session_dir, current_id, current_first_ts):
+def previous_session_id(index, current_id, current_first_ts):
+    """The id of the sibling with the latest last-record timestamp that is
+    still before current_first_ts — computed from the lightweight index
+    alone, no file re-parsed."""
     if current_first_ts is None:
         return None
-    candidates = []
-    for jf in discover_session_files(session_dir):
-        if jf.stem == current_id:
+    best_id, best_last = None, None
+    for sid, info in index.items():
+        if sid == current_id:
             continue
-        records = load_jsonl(jf)
-        _, last_ts = session_span(records)
-        if last_ts is not None and last_ts < current_first_ts:
-            candidates.append((last_ts, jf.stem, records))
-    if not candidates:
-        return None
-    candidates.sort(key=lambda x: x[0])
-    last_ts, sid, records = candidates[-1]
-    return {"id": sid, "records": records, "last_ts": last_ts}
+        last = info.get("last")
+        if last is not None and last < current_first_ts:
+            if best_last is None or last > best_last:
+                best_last = last
+                best_id = sid
+    return best_id
 
 
 # ---------------------------------------------------------------------------
-# Glob matching (paths: of a Rule) — custom, because fnmatch does not
-# distinguish "*" from "**".
+# Glob / gitignore-style matching (paths: of a Rule)
 # ---------------------------------------------------------------------------
 
 def expand_braces(pattern):
@@ -222,7 +330,88 @@ def expand_braces(pattern):
     return out
 
 
-def glob_to_regex(pattern):
+def split_top_level(s, sep=","):
+    """Split on `sep`, but never inside a {brace} group."""
+    parts = []
+    depth = 0
+    cur = []
+    for ch in s:
+        if ch == "{":
+            depth += 1
+            cur.append(ch)
+        elif ch == "}":
+            depth = max(0, depth - 1)
+            cur.append(ch)
+        elif ch == sep and depth == 0:
+            parts.append("".join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+    parts.append("".join(cur))
+    return parts
+
+
+def clean_path_item(raw):
+    """One `paths:` entry: strip a trailing ` # comment` (outside quotes),
+    surrounding quotes, and a trailing `/**`."""
+    s = raw.strip()
+    if not s:
+        return None
+    if not (s.startswith('"') or s.startswith("'")):
+        m = re.search(r"\s+#.*$", s)
+        if m:
+            s = s[: m.start()].rstrip()
+    if len(s) >= 2 and ((s[0] == '"' and s[-1] == '"') or (s[0] == "'" and s[-1] == "'")):
+        s = s[1:-1]
+    s = s.strip()
+    if s.endswith("/**"):
+        s = s[:-3]
+    return s or None
+
+
+def parse_paths_value(raw):
+    """A Rule's `paths:` frontmatter value into glob patterns: a YAML list
+    (items unquoted or quoted) or a comma-separated string (commas inside
+    {brace} groups do not split), each cleaned via clean_path_item()."""
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        out = []
+        for item in raw:
+            out.extend(parse_paths_value(item))
+        return out
+    s = str(raw).strip()
+    if not s:
+        return []
+    if s.startswith("[") and s.endswith("]"):
+        try:
+            data = json.loads(s)
+        except (json.JSONDecodeError, ValueError):
+            data = None
+        if isinstance(data, list):
+            out = []
+            for item in data:
+                cleaned = clean_path_item(str(item))
+                if cleaned:
+                    out.append(cleaned)
+            return out
+        s = s[1:-1]
+    elif len(s) >= 2 and ((s[0] == '"' and s[-1] == '"') or (s[0] == "'" and s[-1] == "'")):
+        # The whole value is one quoted scalar (`paths: "a/**, b/**"`):
+        # strip its outer quotes before splitting, so an embedded comma
+        # list survives instead of leaving stray quote characters behind.
+        s = s[1:-1]
+    out = []
+    for part in split_top_level(s, ","):
+        cleaned = clean_path_item(part)
+        if cleaned:
+            out.append(cleaned)
+    return out
+
+
+def glob_core_regex(pattern):
+    """Translate one glob segment string (no surrounding ^…$) to regex
+    source, supporting `**`, `*`, `?` and `[...]` character classes."""
     i, n = 0, len(pattern)
     out = []
     while i < n:
@@ -243,16 +432,56 @@ def glob_to_regex(pattern):
             out.append("[^/]")
             i += 1
             continue
+        if c == "[":
+            j = i + 1
+            neg = False
+            if j < n and pattern[j] in "!^":
+                neg = True
+                j += 1
+            start_content = j
+            if j < n and pattern[j] == "]":
+                j += 1
+            while j < n and pattern[j] != "]":
+                j += 1
+            if j >= n:
+                out.append(re.escape(c))
+                i += 1
+                continue
+            content = pattern[start_content:j].replace("\\", "\\\\")
+            out.append("[" + ("^" if neg else "") + content + "]")
+            i = j + 1
+            continue
         out.append(re.escape(c))
         i += 1
-    return "^" + "".join(out) + "$"
+    return "".join(out)
+
+
+def pattern_to_regex(pattern):
+    """gitignore-style semantics: a pattern without a slash matches at any
+    depth; a bare literal name (no wildcard) also matches everything below
+    it, like a directory; a leading `/` anchors to the project root."""
+    anchored = pattern.startswith("/")
+    core = pattern[1:] if anchored else pattern
+    is_dir_pattern = core.endswith("/")
+    if is_dir_pattern:
+        core = core[:-1]
+    literal_no_wildcards = not any(ch in core for ch in "*?[")
+    body_has_slash = "/" in core
+    prefix = "" if (anchored or body_has_slash) else "(?:.*/)?"
+    core_regex = glob_core_regex(core)
+    if literal_no_wildcards or is_dir_pattern:
+        return f"^{prefix}{core_regex}(?:/.*)?$"
+    return f"^{prefix}{core_regex}$"
 
 
 def compile_patterns(raw_patterns):
     compiled = []
     for p in raw_patterns:
         for expanded in expand_braces(p):
-            compiled.append(re.compile(glob_to_regex(expanded)))
+            try:
+                compiled.append(re.compile(pattern_to_regex(expanded)))
+            except re.error:
+                continue
     return compiled
 
 
@@ -261,8 +490,29 @@ def path_matches(relpath_posix, compiled_patterns):
 
 
 # ---------------------------------------------------------------------------
-# Rule / nested CLAUDE.md discovery
+# Rule / nested CLAUDE.md discovery — followlinks, loop-guarded (a symlinked
+# rules subdirectory, or a symlinked nested project directory, is common)
 # ---------------------------------------------------------------------------
+
+def walk_files_followlinks(base_dir, suffix):
+    """os.walk(followlinks=True) with a real-path loop guard, yielding
+    Path objects for every file under base_dir ending in `suffix`."""
+    if not base_dir.is_dir():
+        return []
+    found = []
+    visited_real_dirs = set()
+    for root, dirs, files in os.walk(base_dir, followlinks=True):
+        rootp = Path(root)
+        real_root = resolve_best_effort(rootp)
+        if real_root in visited_real_dirs:
+            dirs[:] = []
+            continue
+        visited_real_dirs.add(real_root)
+        for f in files:
+            if f.endswith(suffix):
+                found.append(rootp / f)
+    return sorted(found)
+
 
 def read_frontmatter(text):
     lines = text.splitlines()
@@ -300,44 +550,23 @@ def read_frontmatter(text):
     return meta
 
 
-def parse_paths_value(raw):
-    if raw is None:
-        return []
-    if isinstance(raw, list):
-        out = []
-        for item in raw:
-            out.extend(parse_paths_value(item))
-        return out
-    s = str(raw).strip()
-    if not s:
-        return []
-    if (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
-        return [s[1:-1]]
-    if s.startswith("[") and s.endswith("]"):
-        try:
-            data = json.loads(s)
-            if isinstance(data, list):
-                return [str(x) for x in data]
-        except (json.JSONDecodeError, ValueError):
-            pass
-        inner = s[1:-1]
-        return [p.strip().strip("\"'") for p in inner.split(",") if p.strip()]
-    if "," in s:
-        return [p.strip().strip("\"'") for p in s.split(",") if p.strip()]
-    return [s]
-
-
 def find_rule_files(rules_dir):
-    if not rules_dir.is_dir():
-        return []
-    return sorted(rules_dir.rglob("*.md"))
+    return walk_files_followlinks(rules_dir, ".md")
 
 
 def find_nested_claude_md(project_dir):
     result = []
-    for root, dirs, files in os.walk(project_dir):
+    if not project_dir.is_dir():
+        return result
+    visited_real_dirs = set()
+    for root, dirs, files in os.walk(project_dir, followlinks=True):
         dirs[:] = [d for d in dirs if d not in VENDOR_DIR_NAMES and not d.startswith(".")]
         rootp = Path(root)
+        real_root = resolve_best_effort(rootp)
+        if real_root in visited_real_dirs:
+            dirs[:] = []
+            continue
+        visited_real_dirs.add(real_root)
         if rootp == project_dir:
             continue
         if "CLAUDE.md" in files:
@@ -402,18 +631,40 @@ def resolve_existing(tok, base_dir):
     return None
 
 
-_LEADING_CD_RE = re.compile(r"^\s*cd\s+(\S+)\s*(?:&&|;)")
+def _parse_leading_cd_target(cmd):
+    """The directory argument of a leading `cd <dir> &&`/`cd <dir> ;`,
+    handling a quoted directory name (`cd "my dir" && ...`), or None."""
+    m = re.match(r"^\s*cd\s+", cmd)
+    if not m:
+        return None
+    rest = cmd[m.end():]
+    if rest[:1] in ("'", '"'):
+        quote = rest[0]
+        end = rest.find(quote, 1)
+        if end == -1:
+            return None
+        target = rest[1:end]
+        after = rest[end + 1 :].lstrip()
+    else:
+        mm = re.match(r"(\S+)", rest)
+        if not mm:
+            return None
+        target = mm.group(1)
+        after = rest[mm.end() :].lstrip()
+    if not (after.startswith("&&") or after.startswith(";")):
+        return None
+    return target
 
 
 def bash_effective_base_dir(cmd, project_dir):
     """The directory a Bash command's relative paths resolve against: the
-    project dir, unless the command starts with `cd <dir> &&`/`cd <dir> ;`,
-    in which case it is that target (absolute, `~`-expanded, or itself
-    relative to the project dir)."""
-    m = _LEADING_CD_RE.match(cmd)
-    if not m:
+    project dir, unless the command starts with `cd <dir> &&`/`cd <dir> ;`
+    (dir absolute, `~`-expanded, quoted, or itself relative to the
+    project dir), in which case it is that target."""
+    target = _parse_leading_cd_target(cmd)
+    if target is None:
         return project_dir
-    target = os.path.expanduser(m.group(1))
+    target = os.path.expanduser(target)
     p = Path(target)
     if not p.is_absolute():
         p = project_dir / p
@@ -422,36 +673,33 @@ def bash_effective_base_dir(cmd, project_dir):
 
 def touched_files(records, project_dir):
     touched = []
-    for r in records:
-        if r.get("type") != "assistant":
-            continue
-        content = r.get("message", {}).get("content")
-        if not isinstance(content, list):
-            continue
-        for c in content:
-            if not (isinstance(c, dict) and c.get("type") == "tool_use"):
+    for r, c in iter_tool_uses(records):
+        name = c.get("name")
+        inp = tool_input(c)
+        subagent = r.get("_subagent")
+        if name in ("Read", "Edit", "Write", "MultiEdit", "NotebookEdit"):
+            fp = inp.get("file_path") or inp.get("notebook_path")
+            if isinstance(fp, str) and fp:
+                touched.append({
+                    "real": resolve_relative(fp, project_dir),
+                    "how": f"{name}",
+                    "raw": fp,
+                    "subagent": subagent,
+                })
+        elif name == "Bash":
+            cmd = inp.get("command")
+            if not isinstance(cmd, str):
                 continue
-            name = c.get("name")
-            inp = c.get("input", {}) or {}
-            if name in ("Read", "Edit", "Write", "MultiEdit", "NotebookEdit"):
-                fp = inp.get("file_path") or inp.get("notebook_path")
-                if fp:
+            base_dir = bash_effective_base_dir(cmd, project_dir)
+            for tok in extract_path_tokens(cmd):
+                real = resolve_existing(tok, base_dir)
+                if real:
                     touched.append({
-                        "real": resolve_relative(fp, project_dir),
-                        "how": f"{name}",
-                        "raw": fp,
+                        "real": real,
+                        "how": f"Bash (`{line_excerpt(cmd, 120)}`)",
+                        "raw": tok,
+                        "subagent": subagent,
                     })
-            elif name == "Bash":
-                cmd = inp.get("command", "")
-                base_dir = bash_effective_base_dir(cmd, project_dir)
-                for tok in extract_path_tokens(cmd):
-                    real = resolve_existing(tok, base_dir)
-                    if real:
-                        touched.append({
-                            "real": real,
-                            "how": f"Bash (`{line_excerpt(cmd, 120)}`)",
-                            "raw": tok,
-                        })
     return touched
 
 
@@ -476,19 +724,19 @@ def claude_md_up_from(start_dir, stop_dirs):
 
 
 def external_claude_md_materials(touched, project_dir, config_dir):
-    """Nested-CLAUDE.md-style materials for touched files that fall outside
-    project_dir: walk each one's directory chain up to (not including) the
-    user's home directory or the filesystem root, skipping the config
-    dir's own CLAUDE.md (user memory, not a project material)."""
-    project_real = resolve_best_effort(project_dir)
+    """Nested-CLAUDE.md-style materials for touched files that fall
+    outside project_dir (already resolved): walk each one's directory
+    chain up to (not including) the user's home directory or the
+    filesystem root, skipping the config dir's own CLAUDE.md (user
+    memory, not a project material)."""
     config_claude_md = resolve_best_effort(config_dir / "CLAUDE.md")
-    stop_dirs = {resolve_best_effort(Path.home()), Path(project_real.anchor)}
+    stop_dirs = {resolve_best_effort(Path.home()), Path(project_dir.anchor)}
     seen_paths = set()
     materials = []
     for t in touched:
         real = t["real"]
         try:
-            real.relative_to(project_real)
+            real.relative_to(project_dir)
             continue  # inside the project dir; handled by materials_list()
         except ValueError:
             pass
@@ -510,19 +758,27 @@ def load_record_paths(records):
     paths = set()
     for r in attachment_records(records, "nested_memory"):
         p = r["attachment"].get("path")
-        if p:
+        if isinstance(p, str) and p:
             paths.add(resolve_best_effort(p))
     for r in attachment_records(records, "instructions"):
-        for f in r["attachment"].get("files", []) or []:
+        files = r["attachment"].get("files")
+        if not isinstance(files, list):
+            continue
+        for f in files:
+            if not isinstance(f, dict):
+                continue
             p = f.get("path")
-            if p:
+            if isinstance(p, str) and p:
                 paths.add(resolve_best_effort(p))
     return paths
 
 
-def expected_not_loaded(records, materials, project_dir, config_dir):
-    loaded = load_record_paths(records)
-    touched = touched_files(records, project_dir)
+def expected_not_loaded(main_records, combined_records, materials, project_dir, config_dir):
+    """main_records decides what was loaded (instructions/nested_memory);
+    combined_records (main session + any subagents) decides what was
+    touched — project_dir must already be resolved (item 9)."""
+    loaded = load_record_paths(main_records)
+    touched = touched_files(combined_records, project_dir)
     all_materials = materials + external_claude_md_materials(touched, project_dir, config_dir)
     findings = []
     for mat in all_materials:
@@ -552,20 +808,72 @@ def expected_not_loaded(records, materials, project_dir, config_dir):
 
 
 # ---------------------------------------------------------------------------
-# Bash write-command detection
+# Bash write-command detection — counts only commands that create or
+# modify file *contents*: redirects to a file, tee, sed/perl in-place
+# edits, heredocs redirected to a file, cp/mv targets, touch. Ignores `>`
+# and command-name-shaped words inside quotes or heredoc bodies.
 # ---------------------------------------------------------------------------
 
-_WRITE_TOKEN_RE = re.compile(
-    r"\bsed\s+-i\b|\bperl\s+-i\b|\btee\b|\bmv\b|\bcp\b|\brm\b|\btouch\b"
-)
+_HEREDOC_START_RE = re.compile(r"<<-?~?\s*(['\"]?)(\w+)\1")
+_ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_SEGMENT_SPLIT_RE = re.compile(r"&&|\|\||[|;\n]")
+
+
+def strip_heredoc_bodies(cmd):
+    """Remove heredoc body lines (and the closing delimiter line), keeping
+    the initiating line (which may itself carry a `>` redirect target)."""
+    lines = cmd.split("\n")
+    out = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        line = lines[i]
+        out.append(line)
+        m = _HEREDOC_START_RE.search(line)
+        if m:
+            delim = m.group(2)
+            i += 1
+            while i < n and lines[i].strip() != delim:
+                i += 1
+            if i < n:
+                i += 1  # skip the delimiter line itself
+            continue
+        i += 1
+    return "\n".join(out)
+
+
+def mask_quotes(s):
+    """Replace the interior of every quoted string with 'x's, keeping the
+    quote characters, so a later scan for `>`/command names never matches
+    inside quoted text (`awk '$1 > 5'`, `grep -n 'touch' f`)."""
+    out = []
+    i, n = 0, len(s)
+    while i < n:
+        c = s[i]
+        if c in ("'", '"'):
+            quote = c
+            out.append(c)
+            i += 1
+            start = i
+            while i < n and s[i] != quote:
+                if quote == '"' and s[i] == "\\" and i + 1 < n:
+                    i += 2
+                    continue
+                i += 1
+            out.append("x" * (i - start))
+            if i < n:
+                out.append(s[i])
+                i += 1
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
 
 
 def has_file_redirect(cmd):
     """True if `cmd` redirects output to a real file (`>`, `>>`, `&>`), as
     opposed to duplicating a file descriptor (`2>&1`, `>&2`) or discarding
-    to /dev/null. A bare heredoc (`<<EOF`) is not itself a redirect: it only
-    counts here when it appears alongside an actual `>`/`>>` target, e.g.
-    `cat > out.txt <<EOF` or `cat <<EOF > out.txt`."""
+    to /dev/null."""
     for m in re.finditer(r">{1,2}", cmd):
         rest = cmd[m.end():].lstrip()
         if rest.startswith("&") or rest.startswith("/dev/null"):
@@ -574,40 +882,73 @@ def has_file_redirect(cmd):
     return False
 
 
+def _segment_tokens(segment):
+    try:
+        return shlex.split(segment)
+    except ValueError:
+        return segment.split()
+
+
+def _has_inplace_flag(tokens, prog):
+    """sed: -i, -i.bak, --in-place, --in-place=..., or a short-flag
+    cluster containing i (e.g. -Ei). perl: -i, -i.bak, -pi, -pi.bak."""
+    for t in tokens:
+        if not t.startswith("-"):
+            continue
+        if t.startswith("--"):
+            if t == "--in-place" or t.startswith("--in-place="):
+                return True
+            continue
+        core = t[1:].split(".", 1)[0]
+        if "i" in core:
+            return True
+    return False
+
+
 def is_write_command(cmd):
-    if _WRITE_TOKEN_RE.search(cmd):
+    if not isinstance(cmd, str) or not cmd:
+        return False
+    cleaned = mask_quotes(strip_heredoc_bodies(cmd))
+    if has_file_redirect(cleaned):
         return True
-    return has_file_redirect(cmd)
+    for seg in _SEGMENT_SPLIT_RE.split(cleaned):
+        tokens = _segment_tokens(seg)
+        idx = 0
+        while idx < len(tokens) and _ENV_ASSIGN_RE.match(tokens[idx]):
+            idx += 1
+        if idx >= len(tokens):
+            continue
+        prog = os.path.basename(tokens[idx])
+        rest = tokens[idx + 1 :]
+        if prog in ("tee", "touch", "cp", "mv"):
+            return True
+        if prog in ("sed", "perl") and _has_inplace_flag(rest, prog):
+            return True
+    return False
 
 
 def bash_write_commands(records):
     out = []
-    for r in records:
-        if r.get("type") != "assistant":
+    for r, c in iter_tool_uses(records):
+        if c.get("name") != "Bash":
             continue
-        content = r.get("message", {}).get("content")
-        if not isinstance(content, list):
-            continue
-        for c in content:
-            if isinstance(c, dict) and c.get("type") == "tool_use" and c.get("name") == "Bash":
-                cmd = (c.get("input", {}) or {}).get("command", "")
-                if cmd and is_write_command(cmd):
-                    out.append({"command": cmd, "timestamp": r.get("timestamp")})
+        cmd = tool_input(c).get("command")
+        if isinstance(cmd, str) and cmd and is_write_command(cmd):
+            out.append({
+                "command": cmd,
+                "timestamp": r.get("timestamp"),
+                "subagent": r.get("_subagent"),
+            })
     return out
 
 
 def tool_use_counts(records):
     counts = {}
-    for r in records:
-        if r.get("type") != "assistant":
-            continue
-        content = r.get("message", {}).get("content")
-        if not isinstance(content, list):
-            continue
-        for c in content:
-            if isinstance(c, dict) and c.get("type") == "tool_use":
-                name = c.get("name", "?")
-                counts[name] = counts.get(name, 0) + 1
+    for r, c in iter_tool_uses(records):
+        name = c.get("name")
+        if not isinstance(name, str) or not name:
+            name = "?"
+        counts[name] = counts.get(name, 0) + 1
     return counts
 
 
@@ -628,9 +969,12 @@ def load_settings_files(config_dir, project_dir):
         if exists:
             try:
                 data = json.loads(p.read_text(encoding="utf-8", errors="replace"))
-                hooks_cfg = data.get("hooks", {}) or {}
             except (json.JSONDecodeError, OSError):
-                hooks_cfg = {}
+                data = None
+            if isinstance(data, dict):
+                raw_hooks = data.get("hooks")
+                if isinstance(raw_hooks, dict):
+                    hooks_cfg = raw_hooks
         out.append({"path": p, "exists": exists, "hooks": hooks_cfg})
     return out
 
@@ -648,7 +992,10 @@ def extract_hook_entries(settings_list):
                 if not isinstance(m, dict):
                     continue
                 matcher = m.get("matcher", "") or ""
-                for h in m.get("hooks", []) or []:
+                hooks = m.get("hooks")
+                if not isinstance(hooks, list):
+                    continue
+                for h in hooks:
                     if isinstance(h, dict) and h.get("type") == "command" and h.get("command"):
                         entries.append({
                             "event": event,
@@ -668,54 +1015,111 @@ def matcher_covers_write_edit(matcher):
         return False
 
 
+def matcher_covers_tool(matcher, tool_name):
+    if matcher in ("", "*", None):
+        return True
+    try:
+        return re.search(matcher, tool_name) is not None
+    except re.error:
+        return False
+
+
+def derive_hook_command(hook_name, hook_event, hook_entries):
+    """A hook error record often carries no usable command directly (the
+    real hook_non_blocking_error shape has none at all). Recover it by
+    matching hookEvent, and — when hookName embeds the tool as
+    `Event:Tool` — the tool, against the configured hooks."""
+    tool_name = None
+    if isinstance(hook_name, str) and ":" in hook_name:
+        tool_name = hook_name.rsplit(":", 1)[-1]
+    candidates = [h for h in hook_entries if h["event"] == hook_event]
+    if tool_name:
+        for h in candidates:
+            if matcher_covers_tool(h["matcher"], tool_name):
+                return h["command"]
+    if len(candidates) == 1:
+        return candidates[0]["command"]
+    return None
+
+
 def executed_hook_commands(records):
     cmds = set()
     for r in records:
+        if not isinstance(r, dict):
+            continue
         if r.get("type") == "attachment":
-            att = r.get("attachment", {})
-            if att.get("type") in ("hook_success",) + HOOK_ERROR_ATTACHMENT_TYPES:
+            att = r.get("attachment")
+            if isinstance(att, dict) and att.get("type") == "hook_success":
                 cmd = att.get("command")
-                if cmd:
+                if isinstance(cmd, str) and cmd:
                     cmds.add(cmd)
         if r.get("type") == "system" and r.get("subtype") == "stop_hook_summary":
-            for hi in r.get("hookInfos", []) or []:
-                cmd = hi.get("command")
-                if cmd:
-                    cmds.add(cmd)
+            hook_infos = r.get("hookInfos")
+            if isinstance(hook_infos, list):
+                for hi in hook_infos:
+                    if isinstance(hi, dict):
+                        cmd = hi.get("command")
+                        if isinstance(cmd, str) and cmd:
+                            cmds.add(cmd)
     return cmds
 
 
-def hook_error_records(records):
+def hook_error_records(records, hook_entries):
+    """Real shapes: hook_non_blocking_error = {hookName, toolUseID,
+    hookEvent, stderr, stdout, exitCode} (no command); hook_blocking_error
+    = {hookName, toolUseID, hookEvent, blockingError: {blockingError,
+    command}}. A hook that errored counts as having run."""
     errs = []
     for r in records:
+        if not isinstance(r, dict):
+            continue
+        subagent = r.get("_subagent")
         if r.get("type") == "attachment":
-            att = r.get("attachment", {})
+            att = r.get("attachment")
+            if not isinstance(att, dict):
+                continue
             t = att.get("type")
             if t == "hook_non_blocking_error":
+                hook_name = att.get("hookName")
+                event = att.get("hookEvent")
+                command = derive_hook_command(hook_name, event, hook_entries)
+                text = att.get("stderr") or att.get("stdout") or ""
                 errs.append({
-                    "hookName": att.get("hookName"),
-                    "command": att.get("command"),
-                    "event": att.get("hookEvent"),
-                    "text": att.get("stderr") or att.get("stdout") or "",
+                    "hookName": hook_name, "command": command, "event": event,
+                    "text": text if isinstance(text, str) else "", "subagent": subagent,
                 })
             elif t == "hook_blocking_error":
+                hook_name = att.get("hookName")
+                event = att.get("hookEvent")
+                be = att.get("blockingError")
+                command = None
+                text = ""
+                if isinstance(be, dict):
+                    command = be.get("command")
+                    text = be.get("blockingError") or ""
+                elif isinstance(be, str):
+                    text = be
+                if not isinstance(command, str) or not command:
+                    command = derive_hook_command(hook_name, event, hook_entries)
                 errs.append({
-                    "hookName": att.get("hookName"),
-                    "command": att.get("command"),
-                    "event": att.get("hookEvent"),
-                    "text": att.get("blockingError") or "",
+                    "hookName": hook_name, "command": command, "event": event,
+                    "text": text if isinstance(text, str) else "", "subagent": subagent,
                 })
         if r.get("type") == "system" and r.get("subtype") == "stop_hook_summary":
-            for he in r.get("hookErrors", []) or []:
+            hook_errors = r.get("hookErrors")
+            if not isinstance(hook_errors, list):
+                continue
+            for he in hook_errors:
                 if isinstance(he, dict):
                     errs.append({
                         "hookName": he.get("hookName") or he.get("command"),
                         "command": he.get("command"),
                         "event": "Stop",
                         "text": he.get("stderr") or he.get("error") or json.dumps(he, ensure_ascii=False),
+                        "subagent": subagent,
                     })
                 else:
-                    errs.append({"hookName": None, "command": None, "event": "Stop", "text": str(he)})
+                    errs.append({"hookName": None, "command": None, "event": "Stop", "text": str(he), "subagent": subagent})
     return errs
 
 
@@ -742,7 +1146,7 @@ def render_environment(config_dir, project_dir):
     return lines, set(absent)
 
 
-def render_overview(session_id, records, project_dir, transcript_path):
+def render_overview(session_id, records, transcript_path):
     first_ts, last_ts = session_span(records)
     cwd = first_field(records, "cwd")
     entrypoint = first_field(records, "entrypoint")
@@ -752,14 +1156,20 @@ def render_overview(session_id, records, project_dir, transcript_path):
     lines.append(f"- Start: {fmt_dt(first_ts)}")
     lines.append(f"- End: {fmt_dt(last_ts)}")
     lines.append(f"- cwd: {cwd or 'unknown'}")
+    if isinstance(cwd, str) and cwd:
+        try:
+            runtime_cwd = os.getcwd()
+        except OSError:
+            runtime_cwd = None
+        if runtime_cwd and cwd != runtime_cwd:
+            lines.append(f"- Note: recorded cwd differs from this run's cwd (`{runtime_cwd}`)")
     if entrypoint:
         lines.append(f"- Entrypoint: {entrypoint}")
-    # version transitions
     versions = []
     prev = None
     for r in records:
         v = r.get("version")
-        if v and v != prev:
+        if isinstance(v, str) and v and v != prev:
             versions.append((r.get("timestamp"), v))
             prev = v
     if versions:
@@ -768,7 +1178,6 @@ def render_overview(session_id, records, project_dir, transcript_path):
             lines.append(f"  - {v} (first seen {fmt_dt(parse_ts(ts))})")
     else:
         lines.append("- Versions: none recorded")
-    # auto_mode events
     ams = attachment_records(records, "auto_mode")
     if ams:
         lines.append("- Auto mode:")
@@ -781,16 +1190,13 @@ def render_overview(session_id, records, project_dir, transcript_path):
     return lines
 
 
-def render_drift(records, session_dir, session_id):
-    first_ts, _ = session_span(records)
-    prev = find_previous_session(session_dir, session_id, first_ts)
+def render_drift(records, prev_id, prev_records):
     lines = ["## Drift vs previous session", ""]
-    if prev is None:
+    if prev_id is None or prev_records is None:
         lines.append("no previous session transcript")
         lines.append("")
         return lines
-    prev_records = prev["records"]
-    lines.append(f"- Previous session: {prev['id']}")
+    lines.append(f"- Previous session: {prev_id}")
 
     cur_version = last_field(records, "version")
     prev_version = last_field(prev_records, "version")
@@ -855,8 +1261,11 @@ def render_loaded_instructions(records):
     lines = ["## Loaded instructions", ""]
     entries = []
     for r in attachment_records(records, "instructions"):
-        for f in r["attachment"].get("files", []) or []:
-            entries.append((r.get("timestamp"), "instructions", f.get("type", "?"), f.get("path")))
+        files = r["attachment"].get("files")
+        if isinstance(files, list):
+            for f in files:
+                if isinstance(f, dict):
+                    entries.append((r.get("timestamp"), "instructions", f.get("type", "?"), f.get("path")))
     for r in attachment_records(records, "nested_memory"):
         entries.append((r.get("timestamp"), "nested_memory", "-", r["attachment"].get("path")))
     entries.sort(key=lambda e: e[0] or "")
@@ -864,7 +1273,12 @@ def render_loaded_instructions(records):
         lines.append("- none recorded")
     else:
         for ts, kind, ftype, path in entries:
-            lines.append(f"- {fmt_dt(parse_ts(ts))}: {kind} ({ftype}) `{path}`")
+            if isinstance(path, str) and path:
+                real = resolve_best_effort(path)
+                shown = f"`{real}`" if str(real) == path else f"`{real}` (recorded as `{path}`)"
+            else:
+                shown = f"`{path}`"
+            lines.append(f"- {fmt_dt(parse_ts(ts))}: {kind} ({ftype}) {shown}")
     lines.append("")
     return lines
 
@@ -873,24 +1287,21 @@ def render_skills_and_commands(records):
     lines = ["## Skills and commands", ""]
     any_found = False
     for r in attachment_records(records, "invoked_skills"):
-        for s in r["attachment"].get("skills", []) or []:
+        skills = r["attachment"].get("skills")
+        if isinstance(skills, list):
+            for s in skills:
+                if isinstance(s, dict):
+                    any_found = True
+                    lines.append(f"- {fmt_dt(parse_ts(r.get('timestamp')))}: invoked_skills `{s.get('name')}` (`{s.get('path')}`)")
+    for r, c in iter_tool_uses(records):
+        if c.get("name") == "Skill":
             any_found = True
-            lines.append(f"- {fmt_dt(parse_ts(r.get('timestamp')))}: invoked_skills `{s.get('name')}` (`{s.get('path')}`)")
-    for r in records:
-        if r.get("type") != "assistant":
-            continue
-        content = r.get("message", {}).get("content")
-        if not isinstance(content, list):
-            continue
-        for c in content:
-            if isinstance(c, dict) and c.get("type") == "tool_use" and c.get("name") == "Skill":
-                any_found = True
-                inp = c.get("input", {}) or {}
-                lines.append(f"- {fmt_dt(parse_ts(r.get('timestamp')))}: Skill tool_use `{inp.get('skill')}` args={json.dumps(inp.get('args', ''), ensure_ascii=False)}")
+            inp = tool_input(c)
+            lines.append(f"- {fmt_dt(parse_ts(r.get('timestamp')))}: Skill tool_use `{inp.get('skill')}` args={json.dumps(inp.get('args', ''), ensure_ascii=False)}")
     for r in records:
         if r.get("type") != "user":
             continue
-        content = r.get("message", {}).get("content")
+        content = message_content(r)
         if not isinstance(content, str):
             continue
         for m in re.finditer(r"<command-name>([^<]*)</command-name>", content):
@@ -902,25 +1313,25 @@ def render_skills_and_commands(records):
     return lines
 
 
-def render_tool_use(records):
+def render_tool_use(combined_records):
     lines = ["## Tool use", ""]
-    counts = tool_use_counts(records)
+    counts = tool_use_counts(combined_records)
     if counts:
         for name in sorted(counts, key=lambda n: (-counts[n], n)):
             lines.append(f"- {name}: {counts[name]}")
     else:
         lines.append("- no tool calls recorded")
-    writes = bash_write_commands(records)
+    writes = bash_write_commands(combined_records)
     lines.append(f"- Bash write commands: {len(writes)}")
     for w in writes[:20]:
-        lines.append(f"  - {fmt_dt(parse_ts(w['timestamp']))}: `{line_excerpt(w['command'], 200)}`")
+        lines.append(f"  - {fmt_dt(parse_ts(w['timestamp']))}: `{line_excerpt(w['command'], 200)}`{subagent_suffix(w.get('subagent'))}")
     if len(writes) > 20:
         lines.append(f"  - … ({len(writes) - 20} more)")
     lines.append("")
     return lines, writes
 
 
-def render_hooks(records, hook_entries, bash_writes):
+def render_hooks(combined_records, hook_entries, bash_writes):
     lines = ["## Hooks", ""]
     lines.append("### Configured hooks")
     if hook_entries:
@@ -929,15 +1340,21 @@ def render_hooks(records, hook_entries, bash_writes):
     else:
         lines.append("- none configured")
 
-    executed = executed_hook_commands(records)
+    errs = hook_error_records(combined_records, hook_entries)
+    executed = executed_hook_commands(combined_records) | {e["command"] for e in errs if e.get("command")}
 
     lines.append("")
     lines.append("### Hooks bypassed by Bash edits")
     bypassed = []
     if bash_writes:
         for h in hook_entries:
-            if h["event"] in ("PreToolUse", "PostToolUse") and matcher_covers_write_edit(h["matcher"]):
-                bypassed.append(h)
+            if h["event"] not in ("PreToolUse", "PostToolUse") or not matcher_covers_write_edit(h["matcher"]):
+                continue
+            if h["matcher"] in ("", "*", None) and h["command"] in executed:
+                # An unrestricted matcher also covers Bash itself: a run
+                # record means it fired, so nothing was bypassed.
+                continue
+            bypassed.append(h)
     if bypassed:
         for h in bypassed:
             lines.append(
@@ -950,11 +1367,13 @@ def render_hooks(records, hook_entries, bash_writes):
 
     lines.append("")
     lines.append("### Hook errors")
-    errs = hook_error_records(records)
     if errs:
         for e in errs:
             label = e.get("command") or e.get("hookName") or "(unknown hook)"
-            lines.append(f"- Hook error: `{label}` (event={e.get('event')}) — stderr: \"{line_excerpt(e.get('text', ''), 300)}\"")
+            lines.append(
+                f"- Hook error: `{label}` (event={e.get('event')}) — "
+                f"stderr: \"{line_excerpt(e.get('text', ''), 300)}\"{subagent_suffix(e.get('subagent'))}"
+            )
     else:
         lines.append("- none recorded")
 
@@ -970,9 +1389,9 @@ def render_hooks(records, hook_entries, bash_writes):
     return lines, bypassed, errs, no_run
 
 
-def render_instruction_coverage(records, materials, project_dir, config_dir):
+def render_instruction_coverage(records, combined_records, materials, project_dir, config_dir):
     lines = ["## Instruction coverage", ""]
-    findings = expected_not_loaded(records, materials, project_dir, config_dir)
+    findings = expected_not_loaded(records, combined_records, materials, project_dir, config_dir)
     if not materials:
         lines.append("- no Rules or nested CLAUDE.md found")
     else:
@@ -988,7 +1407,7 @@ def render_instruction_coverage(records, materials, project_dir, config_dir):
             suffix = " (outside project dir)" if mat.get("outside_project") else ""
             lines.append(f"- {kind} `{mat['path']}`{suffix}: expected but not loaded")
             for t in f["touches"]:
-                lines.append(f"  - touched: `{line_excerpt(t['raw'], 200)}` via {t['how']}")
+                lines.append(f"  - touched: `{line_excerpt(t['raw'], 200)}` via {t['how']}{subagent_suffix(t.get('subagent'))}")
     else:
         lines.append("- none")
     lines.append("")
@@ -1014,12 +1433,8 @@ _COMMAND_MARKUP_PRESENT_RE = re.compile(r"<command-(?:message|name|args)>")
 # The harness appends one of these fixed sentences after an AskUserQuestion
 # answer; they are boilerplate, not part of what the user said.
 _ASKUSERQUESTION_BOILERPLATE_RES = [
-    re.compile(
-        r"\s*Read the answers carefully\b.*?actually say\.?\s*$", re.S
-    ),
-    re.compile(
-        r"\s*You can now continue with these answers in mind\.?\s*$", re.S
-    ),
+    re.compile(r"\s*Read the answers carefully\b.*?actually say\.?\s*$", re.S),
+    re.compile(r"\s*You can now continue with these answers in mind\.?\s*$", re.S),
 ]
 
 
@@ -1057,7 +1472,7 @@ def last_assistant_text(content):
         return None
     texts = [
         c.get("text") for c in content
-        if isinstance(c, dict) and c.get("type") == "text" and c.get("text")
+        if isinstance(c, dict) and c.get("type") == "text" and isinstance(c.get("text"), str) and c.get("text")
     ]
     return texts[-1] if texts else None
 
@@ -1068,8 +1483,10 @@ def render_human_messages(records):
     entries = []
     after_assistant = None
     for r in records:
+        if not isinstance(r, dict):
+            continue
         if r.get("type") == "assistant":
-            text = last_assistant_text(r.get("message", {}).get("content"))
+            text = last_assistant_text(message_content(r))
             if text:
                 after_assistant = text
             continue
@@ -1077,8 +1494,11 @@ def render_human_messages(records):
             continue
         if r.get("isMeta") or r.get("isCompactSummary"):
             continue
-        content = r.get("message", {}).get("content")
-        if isinstance(content, str) and "toolUseResult" not in r:
+        origin = r.get("origin")
+        origin_kind = origin.get("kind") if isinstance(origin, dict) else None
+        has_tool_use_result = "toolUseResult" in r
+        content = message_content(r)
+        if isinstance(content, str):
             if is_harness_injected_message(r, content):
                 continue
             entries.append((r.get("timestamp"), "human", content, after_assistant))
@@ -1091,6 +1511,14 @@ def render_human_messages(records):
                         if isinstance(text, str):
                             text = strip_askuserquestion_boilerplate(text)
                         entries.append((r.get("timestamp"), "AskUserQuestion answer", text, after_assistant))
+            if origin_kind == "human" or not has_tool_use_result:
+                texts = [
+                    c.get("text") for c in content
+                    if isinstance(c, dict) and c.get("type") == "text" and isinstance(c.get("text"), str) and c.get("text")
+                ]
+                joined = "\n".join(texts).strip()
+                if joined:
+                    entries.append((r.get("timestamp"), "human", joined, after_assistant))
     if not entries:
         lines.append("- none recorded")
     else:
@@ -1109,7 +1537,7 @@ def render_tool_errors(records):
     for r in records:
         if r.get("type") != "user":
             continue
-        content = r.get("message", {}).get("content")
+        content = message_content(r)
         if not isinstance(content, list):
             continue
         for c in content:
@@ -1141,18 +1569,21 @@ def render_not_obtained(records):
 # Session rendering
 # ---------------------------------------------------------------------------
 
-def render_session(session_id, records, session_dir, project_dir, config_dir, hook_entries, materials):
-    transcript_path = session_dir / f"{session_id}.jsonl"
+def render_session(session_id, records, transcript_path, session_dir, project_dir, config_dir,
+                    hook_entries, materials, prev_id, prev_records):
+    subagent_records = load_subagent_records(session_dir, session_id)
+    combined = records + subagent_records
+
     lines = [f"# Session {session_id}", ""]
-    lines += render_overview(session_id, records, project_dir, transcript_path)
-    lines += render_drift(records, session_dir, session_id)
+    lines += render_overview(session_id, records, transcript_path)
+    lines += render_drift(records, prev_id, prev_records)
     lines += render_loaded_instructions(records)
     lines += render_skills_and_commands(records)
-    tool_lines, bash_writes = render_tool_use(records)
+    tool_lines, bash_writes = render_tool_use(combined)
     lines += tool_lines
-    hook_lines, bypassed, errs, no_run = render_hooks(records, hook_entries, bash_writes)
+    hook_lines, bypassed, errs, no_run = render_hooks(combined, hook_entries, bash_writes)
     lines += hook_lines
-    cov_lines, findings = render_instruction_coverage(records, materials, project_dir, config_dir)
+    cov_lines, findings = render_instruction_coverage(records, combined, materials, project_dir, config_dir)
     lines += cov_lines
     lines += render_human_messages(records)
     lines += render_tool_errors(records)
@@ -1162,7 +1593,7 @@ def render_session(session_id, records, session_dir, project_dir, config_dir, ho
     facts = {
         "expected_not_loaded": [str(f["material"]["path"]) for f in findings],
         "hooks_bypassed": [b["command"] for b in bypassed],
-        "hook_errors": [single_line(f"{e.get('command') or e.get('hookName')}|{trunc(e.get('text',''), 60)}") for e in errs],
+        "hook_errors": [single_line(f"{e.get('command') or e.get('hookName')}|{e.get('event')}") for e in errs],
         "hooks_no_run": [h["command"] for h in no_run],
     }
     return lines, facts
@@ -1204,13 +1635,23 @@ def render_cross_session(session_ids, per_session_facts):
 # CLI
 # ---------------------------------------------------------------------------
 
+def positive_int(s):
+    try:
+        v = int(s)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"--days must be a positive integer, got {s!r}")
+    if v <= 0:
+        raise argparse.ArgumentTypeError(f"--days must be a positive integer, got {s!r}")
+    return v
+
+
 def parse_args(argv):
     p = argparse.ArgumentParser(
         prog="collect_facts.py",
         description="Extract facts from Claude Code session transcripts for a retrospective.",
     )
-    p.add_argument("--session", required=True, help="anchor session ID")
-    p.add_argument("--days", type=int, default=None, help="also cover sessions active in the last N days")
+    p.add_argument("--session", required=True, help="anchor session ID (matched literally)")
+    p.add_argument("--days", type=positive_int, default=None, help="also cover sessions active in the last N days")
     p.add_argument("--config-dir", default=None, help="override the Claude config directory")
     return p.parse_args(argv)
 
@@ -1235,29 +1676,42 @@ def main(argv=None):
 
     anchor_records = load_jsonl(transcript_path)
     session_dir = transcript_path.parent
-    project_dir = first_field(anchor_records, "cwd")
-    project_dir = Path(project_dir) if project_dir else Path.cwd()
+    recorded_cwd = first_field(anchor_records, "cwd")
+    project_dir_raw = Path(recorded_cwd) if recorded_cwd else Path.cwd()
+    project_dir = resolve_best_effort(project_dir_raw)  # item 9: compare touches against the real path
+
+    # One lightweight pass over every sibling transcript (item 14): never
+    # loads a sibling's full records just to learn its time span.
+    index = build_session_index(session_dir)
+    if args.session not in index:
+        index[args.session] = {"path": transcript_path, "first": None, "last": None}
+    anchor_first, anchor_last = session_span(anchor_records)
+    index[args.session] = {"path": transcript_path, "first": anchor_first, "last": anchor_last}
 
     if args.days is not None:
-        session_ids = sessions_within_days(session_dir, args.days)
+        now = datetime.datetime.now(datetime.timezone.utc)
+        window = datetime.timedelta(days=args.days)
+        session_ids = [sid for sid, info in index.items() if info["last"] is not None and (now - info["last"]) <= window]
+        if args.session not in session_ids:
+            session_ids.append(args.session)
     else:
         session_ids = [args.session]
 
-    # Load records for every session in scope, keyed by id, sorted by start time.
-    sessions = {}
-    for sid in session_ids:
-        path = session_dir / f"{sid}.jsonl"
-        if sid == args.session:
-            records = anchor_records
-        elif path.is_file():
-            records = load_jsonl(path)
-        else:
-            continue
-        sessions[sid] = records
-    if args.session not in sessions:
-        sessions[args.session] = anchor_records
+    # Each transcript is parsed in full at most once per run, and only for
+    # a session that ends up analyzed (in scope, or needed as someone's
+    # previous session) — never for the whole sibling set up front.
+    records_cache = {args.session: anchor_records}
 
-    ordered_ids = sorted(sessions, key=lambda sid: (session_span(sessions[sid])[0] or datetime.datetime.min.replace(tzinfo=datetime.timezone.utc)))
+    def get_records(sid):
+        if sid not in records_cache:
+            path = index.get(sid, {}).get("path") or (session_dir / f"{sid}.jsonl")
+            records_cache[sid] = load_jsonl(path) if path.is_file() else []
+        return records_cache[sid]
+
+    ordered_ids = sorted(
+        session_ids,
+        key=lambda sid: index.get(sid, {}).get("first") or datetime.datetime.min.replace(tzinfo=datetime.timezone.utc),
+    )
 
     settings_list = load_settings_files(config_dir, project_dir)
     hook_entries = extract_hook_entries(settings_list)
@@ -1269,7 +1723,15 @@ def main(argv=None):
 
     per_session_facts = {}
     for sid in ordered_ids:
-        session_lines, facts = render_session(sid, sessions[sid], session_dir, project_dir, config_dir, hook_entries, materials)
+        records = get_records(sid)
+        first_ts = index.get(sid, {}).get("first")
+        prev_id = previous_session_id(index, sid, first_ts)
+        prev_records = get_records(prev_id) if prev_id else None
+        path = index.get(sid, {}).get("path") or (session_dir / f"{sid}.jsonl")
+        session_lines, facts = render_session(
+            sid, records, path, session_dir, project_dir, config_dir,
+            hook_entries, materials, prev_id, prev_records,
+        )
         out += session_lines
         per_session_facts[sid] = facts
 
