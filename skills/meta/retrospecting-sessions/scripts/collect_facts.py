@@ -156,6 +156,16 @@ def tool_use_index(records):
     return idx
 
 
+def tool_use_lookup(tu_idx, c):
+    """tu_idx.get(c["tool_use_id"]), tolerating a malformed record where
+    tool_use_id is not a string (e.g. a list — unhashable, so a plain
+    dict.get() would raise)."""
+    tid = c.get("tool_use_id")
+    if not isinstance(tid, str):
+        return {}
+    return tu_idx.get(tid, {})
+
+
 def first_field(records, field):
     for r in records:
         if not isinstance(r, dict):
@@ -175,6 +185,19 @@ def last_field(records, field):
         if v:
             val = v
     return val
+
+
+def first_string_field(records, field):
+    """Like first_field, but skips a record where the field is present
+    with a non-string value (a malformed `"cwd": 123`, say) instead of
+    handing the caller a type it can't use as a path."""
+    for r in records:
+        if not isinstance(r, dict):
+            continue
+        v = r.get(field)
+        if isinstance(v, str) and v:
+            return v
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -351,18 +374,39 @@ def split_top_level(s, sep=","):
     return parts
 
 
+def strip_trailing_comment(s):
+    """Drop a ` # comment` that starts outside any quoted span (so a `#`
+    that is part of quoted pattern text, or that sits before a quote's own
+    closing character, is never mistaken for one)."""
+    in_quote = None
+    for i, ch in enumerate(s):
+        if in_quote:
+            if ch == in_quote:
+                in_quote = None
+            continue
+        if ch in ("'", '"'):
+            in_quote = ch
+            continue
+        if ch == "#" and (i == 0 or s[i - 1].isspace()):
+            return s[:i].rstrip()
+    return s
+
+
 def clean_path_item(raw):
-    """One `paths:` entry: strip a trailing ` # comment` (outside quotes),
-    surrounding quotes, and a trailing `/**`."""
+    """One `paths:` entry: a quoted entry (`"a/**"  # c`, `'a/**' # c`)
+    keeps only its quoted content, discarding anything — comment or not —
+    after the closing quote; an unquoted entry has a trailing ` #
+    comment` stripped. Either way, a trailing `/**` is then dropped."""
     s = raw.strip()
     if not s:
         return None
-    if not (s.startswith('"') or s.startswith("'")):
-        m = re.search(r"\s+#.*$", s)
-        if m:
-            s = s[: m.start()].rstrip()
-    if len(s) >= 2 and ((s[0] == '"' and s[-1] == '"') or (s[0] == "'" and s[-1] == "'")):
-        s = s[1:-1]
+    if s[0] in ('"', "'"):
+        quote = s[0]
+        end = s.find(quote, 1)
+        if end != -1:
+            s = s[1:end]
+    else:
+        s = strip_trailing_comment(s)
     s = s.strip()
     if s.endswith("/**"):
         s = s[:-3]
@@ -380,7 +424,7 @@ def parse_paths_value(raw):
         for item in raw:
             out.extend(parse_paths_value(item))
         return out
-    s = str(raw).strip()
+    s = strip_trailing_comment(str(raw).strip())
     if not s:
         return []
     if s.startswith("[") and s.endswith("]"):
@@ -534,6 +578,10 @@ def read_frontmatter(text):
                 items = []
                 k = j + 1
                 while k < len(body):
+                    stripped = body[k].strip()
+                    if stripped == "" or stripped.startswith("#"):
+                        k += 1
+                        continue
                     im = re.match(r"^\s*-\s+(.*)$", body[k])
                     if not im:
                         break
@@ -646,7 +694,9 @@ def _parse_leading_cd_target(cmd):
         target = rest[1:end]
         after = rest[end + 1 :].lstrip()
     else:
-        mm = re.match(r"(\S+)", rest)
+        # Stop at whitespace or a separator glued directly onto the
+        # target with no space (`cd dir;cmd`, `cd dir&&cmd`).
+        mm = re.match(r"([^\s;&|]+)", rest)
         if not mm:
             return None
         target = mm.group(1)
@@ -889,9 +939,29 @@ def _segment_tokens(segment):
         return segment.split()
 
 
+# Combinable short-flag clusters that legitimately include `i`: sed's
+# -Ei/-ni, perl's -pi/-pie. A flag using an unrelated letter that happens
+# to spell "i" as a *substring of its own attached argument* (perl's -I<dir>,
+# -M<module>) must never match — that argument is not a flag cluster.
+_SED_CLUSTER_CHARS = set("Eni")
+_PERL_CLUSTER_CHARS = set("pnie")
+
+# Tokens that introduce the real command rather than being one themselves;
+# the search for a write-shaped program name continues past them. `env`
+# and `xargs` additionally swallow their own following assignments/flags.
+_WRAPPER_KEYWORDS = {
+    "do", "then", "else", "elif", "if", "while", "until",
+    "sudo", "time", "nohup", "command", "exec",
+}
+
+
 def _has_inplace_flag(tokens, prog):
     """sed: -i, -i.bak, --in-place, --in-place=..., or a short-flag
-    cluster containing i (e.g. -Ei). perl: -i, -i.bak, -pi, -pi.bak."""
+    cluster made *only* of E/n/i (e.g. -Ei, -ni). perl: -i, -i.bak, or a
+    cluster made only of p/n/i/e (-pi, -pie). A cluster containing any
+    other letter (perl's -Ilib, -MList::Util=sum) is a different flag
+    with an attached argument, not an in-place toggle."""
+    allowed = _SED_CLUSTER_CHARS if prog == "sed" else _PERL_CLUSTER_CHARS
     for t in tokens:
         if not t.startswith("-"):
             continue
@@ -900,7 +970,63 @@ def _has_inplace_flag(tokens, prog):
                 return True
             continue
         core = t[1:].split(".", 1)[0]
-        if "i" in core:
+        if core and "i" in core and all(ch in allowed for ch in core):
+            return True
+    return False
+
+
+def _skip_leading_wrappers(tokens):
+    """Index of the first token that is the actual command name, skipping
+    a leading run of shell keywords/prefixes (`do`, `sudo`, `time`, ...),
+    plain VAR=value assignments, and `env`/`xargs`'s own flags/assignments
+    (`env FOO=1 cp a b`, `xargs -n1 sed -i ...`)."""
+    idx, n = 0, len(tokens)
+    while idx < n:
+        t = tokens[idx]
+        if _ENV_ASSIGN_RE.match(t):
+            idx += 1
+            continue
+        if t in _WRAPPER_KEYWORDS:
+            idx += 1
+            continue
+        if t in ("env", "xargs"):
+            idx += 1
+            while idx < n and (tokens[idx].startswith("-") or _ENV_ASSIGN_RE.match(tokens[idx])):
+                idx += 1
+            continue
+        break
+    return idx
+
+
+def _is_write_prog(prog, rest):
+    if prog in ("tee", "touch", "cp", "mv"):
+        return True
+    if prog in ("sed", "perl") and _has_inplace_flag(rest, prog):
+        return True
+    return False
+
+
+def _find_exec_is_write(cleaned):
+    """`find ... -exec <command> {} +`/`\\;`: the exec'd command is what
+    matters, not `find` itself. Tokenized once over the whole (cleaned)
+    command so an escaped `\\;` terminator (which shlex unescapes to a
+    plain `;` token) is never mistaken for a shell command separator."""
+    try:
+        tokens = shlex.split(cleaned)
+    except ValueError:
+        return False
+    n = len(tokens)
+    for i, t in enumerate(tokens):
+        if t != "-exec":
+            continue
+        j = i + 1
+        sub = []
+        while j < n and tokens[j] not in ("+", ";"):
+            sub.append(tokens[j])
+            j += 1
+        if not sub:
+            continue
+        if _is_write_prog(os.path.basename(sub[0]), sub[1:]):
             return True
     return False
 
@@ -911,18 +1037,16 @@ def is_write_command(cmd):
     cleaned = mask_quotes(strip_heredoc_bodies(cmd))
     if has_file_redirect(cleaned):
         return True
+    if _find_exec_is_write(cleaned):
+        return True
     for seg in _SEGMENT_SPLIT_RE.split(cleaned):
         tokens = _segment_tokens(seg)
-        idx = 0
-        while idx < len(tokens) and _ENV_ASSIGN_RE.match(tokens[idx]):
-            idx += 1
+        idx = _skip_leading_wrappers(tokens)
         if idx >= len(tokens):
             continue
         prog = os.path.basename(tokens[idx])
         rest = tokens[idx + 1 :]
-        if prog in ("tee", "touch", "cp", "mv"):
-            return True
-        if prog in ("sed", "perl") and _has_inplace_flag(rest, prog):
+        if _is_write_prog(prog, rest):
             return True
     return False
 
@@ -991,16 +1115,20 @@ def extract_hook_entries(settings_list):
             for m in matcher_list:
                 if not isinstance(m, dict):
                     continue
-                matcher = m.get("matcher", "") or ""
+                matcher = m.get("matcher")
+                matcher = matcher if isinstance(matcher, str) else ""
                 hooks = m.get("hooks")
                 if not isinstance(hooks, list):
                     continue
                 for h in hooks:
-                    if isinstance(h, dict) and h.get("type") == "command" and h.get("command"):
+                    if not isinstance(h, dict) or h.get("type") != "command":
+                        continue
+                    command = h.get("command")
+                    if isinstance(command, str) and command:
                         entries.append({
                             "event": event,
                             "matcher": matcher,
-                            "command": h["command"],
+                            "command": command,
                             "source": real,
                         })
     return entries
@@ -1148,7 +1276,7 @@ def render_environment(config_dir, project_dir):
 
 def render_overview(session_id, records, transcript_path):
     first_ts, last_ts = session_span(records)
-    cwd = first_field(records, "cwd")
+    cwd = first_string_field(records, "cwd")
     entrypoint = first_field(records, "entrypoint")
     lines = ["## Overview", ""]
     lines.append(f"- Session ID: {session_id}")
@@ -1268,7 +1396,9 @@ def render_loaded_instructions(records):
                     entries.append((r.get("timestamp"), "instructions", f.get("type", "?"), f.get("path")))
     for r in attachment_records(records, "nested_memory"):
         entries.append((r.get("timestamp"), "nested_memory", "-", r["attachment"].get("path")))
-    entries.sort(key=lambda e: e[0] or "")
+    # Sort by parsed timestamp, not the raw field: a mix of numeric and
+    # string `timestamp` values across records is not otherwise orderable.
+    entries.sort(key=lambda e: parse_ts(e[0]) or datetime.datetime.min.replace(tzinfo=datetime.timezone.utc))
     if not entries:
         lines.append("- none recorded")
     else:
@@ -1505,7 +1635,7 @@ def render_human_messages(records):
         elif isinstance(content, list):
             for c in content:
                 if isinstance(c, dict) and c.get("type") == "tool_result":
-                    tu = tu_idx.get(c.get("tool_use_id"), {})
+                    tu = tool_use_lookup(tu_idx, c)
                     if tu.get("name") == "AskUserQuestion":
                         text = c.get("content")
                         if isinstance(text, str):
@@ -1542,7 +1672,7 @@ def render_tool_errors(records):
             continue
         for c in content:
             if isinstance(c, dict) and c.get("type") == "tool_result" and c.get("is_error"):
-                tu = tu_idx.get(c.get("tool_use_id"), {})
+                tu = tool_use_lookup(tu_idx, c)
                 errors.append((r.get("timestamp"), tu.get("name", "?"), c.get("content")))
     lines.append(f"- Total: {len(errors)}")
     for ts, name, content in errors[:20]:
@@ -1676,7 +1806,7 @@ def main(argv=None):
 
     anchor_records = load_jsonl(transcript_path)
     session_dir = transcript_path.parent
-    recorded_cwd = first_field(anchor_records, "cwd")
+    recorded_cwd = first_string_field(anchor_records, "cwd")
     project_dir_raw = Path(recorded_cwd) if recorded_cwd else Path.cwd()
     project_dir = resolve_best_effort(project_dir_raw)  # item 9: compare touches against the real path
 
