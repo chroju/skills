@@ -123,7 +123,7 @@ def tool_input(c):
 def iter_tool_uses(records):
     """Yield (record, item) for every well-formed assistant tool_use
     content item across `records`. The one iterator every tool-use-reading
-    fact (counts, Bash writes, touched files, Skill calls) is built on."""
+    fact (counts, touched files, Skill calls) is built on."""
     for r in records:
         if not isinstance(r, dict) or r.get("type") != "assistant":
             continue
@@ -869,242 +869,6 @@ def expected_not_loaded(main_records, combined_records, materials, project_dir, 
     return findings
 
 
-# ---------------------------------------------------------------------------
-# Bash write-command detection — counts only commands that create or
-# modify file *contents*: redirects to a file, tee, sed/perl in-place
-# edits, heredocs redirected to a file, cp/mv targets, touch. Ignores `>`
-# and command-name-shaped words inside quotes or heredoc bodies.
-# ---------------------------------------------------------------------------
-
-_HEREDOC_START_RE = re.compile(r"<<-?~?\s*(['\"]?)(\w+)\1")
-_ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-_SEGMENT_SPLIT_RE = re.compile(r"&&|\|\||[|;\n]")
-
-
-def strip_heredoc_bodies(cmd):
-    """Remove heredoc body lines (and the closing delimiter line), keeping
-    the initiating line (which may itself carry a `>` redirect target)."""
-    lines = cmd.split("\n")
-    out = []
-    i = 0
-    n = len(lines)
-    while i < n:
-        line = lines[i]
-        out.append(line)
-        m = _HEREDOC_START_RE.search(line)
-        if m:
-            delim = m.group(2)
-            i += 1
-            while i < n and lines[i].strip() != delim:
-                i += 1
-            if i < n:
-                i += 1  # skip the delimiter line itself
-            continue
-        i += 1
-    return "\n".join(out)
-
-
-def mask_quotes(s):
-    """Replace the interior of every quoted string with 'x's, keeping the
-    quote characters, so a later scan for `>`/command names never matches
-    inside quoted text (`awk '$1 > 5'`, `grep -n 'touch' f`)."""
-    out = []
-    i, n = 0, len(s)
-    while i < n:
-        c = s[i]
-        if c in ("'", '"'):
-            quote = c
-            out.append(c)
-            i += 1
-            start = i
-            while i < n and s[i] != quote:
-                if quote == '"' and s[i] == "\\" and i + 1 < n:
-                    i += 2
-                    continue
-                i += 1
-            out.append("x" * (i - start))
-            if i < n:
-                out.append(s[i])
-                i += 1
-        else:
-            out.append(c)
-            i += 1
-    return "".join(out)
-
-
-def has_file_redirect(cmd):
-    """True if `cmd` redirects output to a real file (`>`, `>>`, `&>`), as
-    opposed to duplicating a file descriptor (`2>&1`, `>&2`) or discarding
-    to /dev/null."""
-    for m in re.finditer(r">{1,2}", cmd):
-        rest = cmd[m.end():].lstrip()
-        if rest.startswith("&") or rest.startswith("/dev/null"):
-            continue
-        return True
-    return False
-
-
-def _segment_tokens(segment):
-    try:
-        return shlex.split(segment)
-    except ValueError:
-        return segment.split()
-
-
-# sed's no-argument switches that may precede -i in a combined cluster
-# (-ri, -nri, -si, -zi, ...); perl's (digits for -0<n>, plus a/l/n/p/s/w/e)
-# that may precede -i (-lpi, -0777pi, ...). Anything after the `i` is an
-# arbitrary suffix (`-i.bak`, `-ibak`, `-i~`) and is never itself checked
-# — only what comes *before* the `i` must be one of these no-argument
-# switches. A flag starting with an argument-taking letter (perl's -I<dir>,
-# -M<module>, -m<module>, -C<enc>) fails this immediately, since that
-# letter is not in either allowed set.
-_SED_PREFIX_CHARS = set("Ernsuz")
-_PERL_PREFIX_CHARS = set("0123456789alnpswe")
-
-# Tokens that introduce the real command rather than being one themselves;
-# the search for a write-shaped program name continues past them. `env`
-# and `xargs` additionally swallow their own following assignments/flags.
-_WRAPPER_KEYWORDS = {
-    "do", "then", "else", "elif", "if", "while", "until",
-    "sudo", "time", "nohup", "command", "exec",
-}
-
-
-def _has_inplace_flag(tokens, prog):
-    """sed: -i, -i.bak, --in-place, --in-place=..., or a short-flag
-    cluster where -i is preceded only by sed's own no-argument switches
-    (-ri, -nri, -zi, ...) with any suffix after the i (-ri.bak, -ibak,
-    -i~). perl: -i, -i.bak, or -i preceded only by its no-argument
-    switches (-lpi, -0777pi, ...), any suffix after the i. A letter
-    before the first i that is not in that no-argument set — perl's
-    -Ilib, -MList::Util=sum — means it is a different, argument-taking
-    flag, not an in-place toggle."""
-    allowed = _SED_PREFIX_CHARS if prog == "sed" else _PERL_PREFIX_CHARS
-    for t in tokens:
-        if not t.startswith("-"):
-            continue
-        if t.startswith("--"):
-            if t == "--in-place" or t.startswith("--in-place="):
-                return True
-            continue
-        core = t[1:]
-        idx = core.find("i")
-        if idx == -1:
-            continue
-        if all(ch in allowed for ch in core[:idx]):
-            return True
-    return False
-
-
-def _skip_leading_wrappers(tokens):
-    """Index of the first token that is the actual command name, skipping
-    a leading run of shell keywords/prefixes (`do`, `sudo`, `time`, ...),
-    plain VAR=value assignments, and `env`/`xargs`'s own flags/assignments
-    (`env FOO=1 cp a b`, `xargs -n1 sed -i ...`)."""
-    idx, n = 0, len(tokens)
-    while idx < n:
-        t = tokens[idx]
-        if _ENV_ASSIGN_RE.match(t):
-            idx += 1
-            continue
-        if t in _WRAPPER_KEYWORDS:
-            idx += 1
-            continue
-        if t in ("env", "xargs"):
-            idx += 1
-            while idx < n and (tokens[idx].startswith("-") or _ENV_ASSIGN_RE.match(tokens[idx])):
-                idx += 1
-            continue
-        break
-    return idx
-
-
-def _is_write_prog(prog, rest):
-    if prog in ("tee", "touch", "cp", "mv"):
-        return True
-    if prog in ("sed", "perl") and _has_inplace_flag(rest, prog):
-        return True
-    return False
-
-
-_SHELL_OPERATOR_TOKENS = {"&&", "||", ";", "|"}
-
-
-def _find_exec_is_write(cleaned):
-    """`find ... -exec <command> {} +`/`\\;`: the exec'd command is what
-    matters, not `find` itself. Tokenized once over the whole (cleaned)
-    command so an escaped `\\;` terminator (which shlex unescapes to a
-    plain `;` token) is never mistaken for a shell command separator.
-    Only a `-exec` that belongs to an actual `find` invocation counts —
-    `echo -exec cp a b` is not one — so a `find` token must have been
-    seen since the last shell operator (or the start of the command)."""
-    try:
-        tokens = shlex.split(cleaned)
-    except ValueError:
-        return False
-    n = len(tokens)
-    in_find = False
-    i = 0
-    while i < n:
-        t = tokens[i]
-        if t in _SHELL_OPERATOR_TOKENS:
-            in_find = False
-            i += 1
-            continue
-        if t == "find":
-            in_find = True
-            i += 1
-            continue
-        if t == "-exec" and in_find:
-            j = i + 1
-            sub = []
-            while j < n and tokens[j] not in ("+", ";"):
-                sub.append(tokens[j])
-                j += 1
-            if sub and _is_write_prog(os.path.basename(sub[0]), sub[1:]):
-                return True
-            i = j + 1
-            continue
-        i += 1
-    return False
-
-
-def is_write_command(cmd):
-    if not isinstance(cmd, str) or not cmd:
-        return False
-    cleaned = mask_quotes(strip_heredoc_bodies(cmd))
-    if has_file_redirect(cleaned):
-        return True
-    if _find_exec_is_write(cleaned):
-        return True
-    for seg in _SEGMENT_SPLIT_RE.split(cleaned):
-        tokens = _segment_tokens(seg)
-        idx = _skip_leading_wrappers(tokens)
-        if idx >= len(tokens):
-            continue
-        prog = os.path.basename(tokens[idx])
-        rest = tokens[idx + 1 :]
-        if _is_write_prog(prog, rest):
-            return True
-    return False
-
-
-def bash_write_commands(records):
-    out = []
-    for r, c in iter_tool_uses(records):
-        if c.get("name") != "Bash":
-            continue
-        cmd = tool_input(c).get("command")
-        if isinstance(cmd, str) and cmd and is_write_command(cmd):
-            out.append({
-                "command": cmd,
-                "timestamp": r.get("timestamp"),
-                "subagent": r.get("_subagent"),
-            })
-    return out
-
-
 def tool_use_counts(records):
     counts = {}
     for r, c in iter_tool_uses(records):
@@ -1171,15 +935,6 @@ def extract_hook_entries(settings_list):
                             "source": real,
                         })
     return entries
-
-
-def matcher_covers_write_edit(matcher):
-    if matcher in ("", "*", None):
-        return True
-    try:
-        return any(re.search(matcher, name) for name in ("Write", "Edit", "MultiEdit"))
-    except re.error:
-        return False
 
 
 def matcher_covers_tool(matcher, tool_name):
@@ -1490,17 +1245,11 @@ def render_tool_use(combined_records):
             lines.append(f"- {name}: {counts[name]}")
     else:
         lines.append("- no tool calls recorded")
-    writes = bash_write_commands(combined_records)
-    lines.append(f"- Bash write commands: {len(writes)}")
-    for w in writes[:20]:
-        lines.append(f"  - {fmt_dt(parse_ts(w['timestamp']))}: `{line_excerpt(w['command'], 200)}`{subagent_suffix(w.get('subagent'))}")
-    if len(writes) > 20:
-        lines.append(f"  - … ({len(writes) - 20} more)")
     lines.append("")
-    return lines, writes
+    return lines
 
 
-def render_hooks(combined_records, hook_entries, bash_writes):
+def render_hooks(combined_records, hook_entries):
     lines = ["## Hooks", ""]
     lines.append("### Configured hooks")
     if hook_entries:
@@ -1511,28 +1260,6 @@ def render_hooks(combined_records, hook_entries, bash_writes):
 
     errs = hook_error_records(combined_records, hook_entries)
     executed = executed_hook_commands(combined_records) | {e["command"] for e in errs if e.get("command")}
-
-    lines.append("")
-    lines.append("### Hooks bypassed by Bash edits")
-    bypassed = []
-    if bash_writes:
-        for h in hook_entries:
-            if h["event"] not in ("PreToolUse", "PostToolUse") or not matcher_covers_write_edit(h["matcher"]):
-                continue
-            if h["matcher"] in ("", "*", None) and h["command"] in executed:
-                # An unrestricted matcher also covers Bash itself: a run
-                # record means it fired, so nothing was bypassed.
-                continue
-            bypassed.append(h)
-    if bypassed:
-        for h in bypassed:
-            lines.append(
-                f"- Hooks bypassed by Bash edits: command=`{h['command']}` "
-                f"(event={h['event']}, matcher=`{h['matcher'] or '(empty)'}`) — "
-                f"{len(bash_writes)} Bash write command(s) in this session"
-            )
-    else:
-        lines.append("- none")
 
     lines.append("")
     lines.append("### Hook errors")
@@ -1555,7 +1282,7 @@ def render_hooks(combined_records, hook_entries, bash_writes):
     else:
         lines.append("- none" if hook_entries else "- none configured")
     lines.append("")
-    return lines, bypassed, errs, no_run
+    return lines, errs, no_run
 
 
 def render_instruction_coverage(records, combined_records, materials, project_dir, config_dir):
@@ -1775,9 +1502,8 @@ def render_session(session_id, records, transcript_path, session_dir, project_di
     lines += render_drift(records, prev_id, prev_records)
     lines += render_loaded_instructions(records)
     lines += render_skills_and_commands(records)
-    tool_lines, bash_writes = render_tool_use(combined)
-    lines += tool_lines
-    hook_lines, bypassed, errs, no_run = render_hooks(combined, hook_entries, bash_writes)
+    lines += render_tool_use(combined)
+    hook_lines, errs, no_run = render_hooks(combined, hook_entries)
     lines += hook_lines
     cov_lines, findings = render_instruction_coverage(records, combined, materials, project_dir, config_dir)
     lines += cov_lines
@@ -1788,7 +1514,6 @@ def render_session(session_id, records, transcript_path, session_dir, project_di
 
     facts = {
         "expected_not_loaded": [str(f["material"]["path"]) for f in findings],
-        "hooks_bypassed": [b["command"] for b in bypassed],
         "hook_errors": [single_line(f"{e.get('command') or e.get('hookName')}|{e.get('event')}") for e in errs],
         "hooks_no_run": [h["command"] for h in no_run],
     }
@@ -1802,7 +1527,6 @@ def render_cross_session(session_ids, per_session_facts):
 
     fact_labels = {
         "expected_not_loaded": "Expected but not loaded",
-        "hooks_bypassed": "Hooks bypassed by Bash edits",
         "hook_errors": "Hook error",
         "hooks_no_run": "Configured hooks with no run record",
     }
