@@ -374,22 +374,34 @@ def split_top_level(s, sep=","):
     return parts
 
 
-def strip_trailing_comment(s):
-    """Drop a ` # comment` that starts outside any quoted span (so a `#`
-    that is part of quoted pattern text, or that sits before a quote's own
-    closing character, is never mistaken for one)."""
-    in_quote = None
+def _find_comment_start(s):
+    """Index of a `#` that opens a comment — at position 0, or preceded by
+    whitespace — or -1. A bare `#` glued onto other text is never one."""
     for i, ch in enumerate(s):
-        if in_quote:
-            if ch == in_quote:
-                in_quote = None
-            continue
-        if ch in ("'", '"'):
-            in_quote = ch
-            continue
         if ch == "#" and (i == 0 or s[i - 1].isspace()):
-            return s[:i].rstrip()
-    return s
+            return i
+    return -1
+
+
+def strip_trailing_comment(s):
+    """Drop a ` # comment` that starts outside quoting. Only a quote
+    character at the very start of the string opens real quoting here —
+    an apostrophe elsewhere (`don't`, `it's`) is just text, never treated
+    as opening an unterminated quote that swallows the rest of the line."""
+    if not s:
+        return s
+    head = ""
+    body = s
+    if s[0] in ("'", '"'):
+        quote = s[0]
+        end = s.find(quote, 1)
+        if end == -1:
+            return s  # unterminated quote: nothing safe to strip
+        head, body = s[: end + 1], s[end + 1 :]
+    idx = _find_comment_start(body)
+    if idx == -1:
+        return s
+    return (head + body[:idx]).rstrip()
 
 
 def clean_path_item(raw):
@@ -939,12 +951,16 @@ def _segment_tokens(segment):
         return segment.split()
 
 
-# Combinable short-flag clusters that legitimately include `i`: sed's
-# -Ei/-ni, perl's -pi/-pie. A flag using an unrelated letter that happens
-# to spell "i" as a *substring of its own attached argument* (perl's -I<dir>,
-# -M<module>) must never match — that argument is not a flag cluster.
-_SED_CLUSTER_CHARS = set("Eni")
-_PERL_CLUSTER_CHARS = set("pnie")
+# sed's no-argument switches that may precede -i in a combined cluster
+# (-ri, -nri, -si, -zi, ...); perl's (digits for -0<n>, plus a/l/n/p/s/w/e)
+# that may precede -i (-lpi, -0777pi, ...). Anything after the `i` is an
+# arbitrary suffix (`-i.bak`, `-ibak`, `-i~`) and is never itself checked
+# — only what comes *before* the `i` must be one of these no-argument
+# switches. A flag starting with an argument-taking letter (perl's -I<dir>,
+# -M<module>, -m<module>, -C<enc>) fails this immediately, since that
+# letter is not in either allowed set.
+_SED_PREFIX_CHARS = set("Ernsuz")
+_PERL_PREFIX_CHARS = set("0123456789alnpswe")
 
 # Tokens that introduce the real command rather than being one themselves;
 # the search for a write-shaped program name continues past them. `env`
@@ -957,11 +973,14 @@ _WRAPPER_KEYWORDS = {
 
 def _has_inplace_flag(tokens, prog):
     """sed: -i, -i.bak, --in-place, --in-place=..., or a short-flag
-    cluster made *only* of E/n/i (e.g. -Ei, -ni). perl: -i, -i.bak, or a
-    cluster made only of p/n/i/e (-pi, -pie). A cluster containing any
-    other letter (perl's -Ilib, -MList::Util=sum) is a different flag
-    with an attached argument, not an in-place toggle."""
-    allowed = _SED_CLUSTER_CHARS if prog == "sed" else _PERL_CLUSTER_CHARS
+    cluster where -i is preceded only by sed's own no-argument switches
+    (-ri, -nri, -zi, ...) with any suffix after the i (-ri.bak, -ibak,
+    -i~). perl: -i, -i.bak, or -i preceded only by its no-argument
+    switches (-lpi, -0777pi, ...), any suffix after the i. A letter
+    before the first i that is not in that no-argument set — perl's
+    -Ilib, -MList::Util=sum — means it is a different, argument-taking
+    flag, not an in-place toggle."""
+    allowed = _SED_PREFIX_CHARS if prog == "sed" else _PERL_PREFIX_CHARS
     for t in tokens:
         if not t.startswith("-"):
             continue
@@ -969,8 +988,11 @@ def _has_inplace_flag(tokens, prog):
             if t == "--in-place" or t.startswith("--in-place="):
                 return True
             continue
-        core = t[1:].split(".", 1)[0]
-        if core and "i" in core and all(ch in allowed for ch in core):
+        core = t[1:]
+        idx = core.find("i")
+        if idx == -1:
+            continue
+        if all(ch in allowed for ch in core[:idx]):
             return True
     return False
 
@@ -1006,28 +1028,45 @@ def _is_write_prog(prog, rest):
     return False
 
 
+_SHELL_OPERATOR_TOKENS = {"&&", "||", ";", "|"}
+
+
 def _find_exec_is_write(cleaned):
     """`find ... -exec <command> {} +`/`\\;`: the exec'd command is what
     matters, not `find` itself. Tokenized once over the whole (cleaned)
     command so an escaped `\\;` terminator (which shlex unescapes to a
-    plain `;` token) is never mistaken for a shell command separator."""
+    plain `;` token) is never mistaken for a shell command separator.
+    Only a `-exec` that belongs to an actual `find` invocation counts —
+    `echo -exec cp a b` is not one — so a `find` token must have been
+    seen since the last shell operator (or the start of the command)."""
     try:
         tokens = shlex.split(cleaned)
     except ValueError:
         return False
     n = len(tokens)
-    for i, t in enumerate(tokens):
-        if t != "-exec":
+    in_find = False
+    i = 0
+    while i < n:
+        t = tokens[i]
+        if t in _SHELL_OPERATOR_TOKENS:
+            in_find = False
+            i += 1
             continue
-        j = i + 1
-        sub = []
-        while j < n and tokens[j] not in ("+", ";"):
-            sub.append(tokens[j])
-            j += 1
-        if not sub:
+        if t == "find":
+            in_find = True
+            i += 1
             continue
-        if _is_write_prog(os.path.basename(sub[0]), sub[1:]):
-            return True
+        if t == "-exec" and in_find:
+            j = i + 1
+            sub = []
+            while j < n and tokens[j] not in ("+", ";"):
+                sub.append(tokens[j])
+                j += 1
+            if sub and _is_write_prog(os.path.basename(sub[0]), sub[1:]):
+                return True
+            i = j + 1
+            continue
+        i += 1
     return False
 
 
@@ -1612,13 +1651,32 @@ def render_human_messages(records):
     tu_idx = tool_use_index(records)
     entries = []
     after_assistant = None
+    # Assistant tool_use counts since the last entry was recorded (reset
+    # each time one is), so consecutive human messages with nothing done
+    # between them read "none" rather than looking like two separate
+    # points needing a "redo" invented between them.
+    tool_counts_since = {}
+
+    def _record_entry(ts, label, text):
+        nonlocal tool_counts_since
+        entries.append((ts, label, text, after_assistant, tool_counts_since))
+        tool_counts_since = {}
+
     for r in records:
         if not isinstance(r, dict):
             continue
         if r.get("type") == "assistant":
-            text = last_assistant_text(message_content(r))
+            content = message_content(r)
+            text = last_assistant_text(content)
             if text:
                 after_assistant = text
+            if isinstance(content, list):
+                for c in content:
+                    if isinstance(c, dict) and c.get("type") == "tool_use":
+                        name = c.get("name")
+                        if not isinstance(name, str) or not name:
+                            name = "?"
+                        tool_counts_since[name] = tool_counts_since.get(name, 0) + 1
             continue
         if r.get("type") != "user":
             continue
@@ -1631,7 +1689,7 @@ def render_human_messages(records):
         if isinstance(content, str):
             if is_harness_injected_message(r, content):
                 continue
-            entries.append((r.get("timestamp"), "human", content, after_assistant))
+            _record_entry(r.get("timestamp"), "human", content)
         elif isinstance(content, list):
             for c in content:
                 if isinstance(c, dict) and c.get("type") == "tool_result":
@@ -1640,7 +1698,7 @@ def render_human_messages(records):
                         text = c.get("content")
                         if isinstance(text, str):
                             text = strip_askuserquestion_boilerplate(text)
-                        entries.append((r.get("timestamp"), "AskUserQuestion answer", text, after_assistant))
+                        _record_entry(r.get("timestamp"), "AskUserQuestion answer", text)
             if origin_kind == "human" or not has_tool_use_result:
                 texts = [
                     c.get("text") for c in content
@@ -1648,14 +1706,22 @@ def render_human_messages(records):
                 ]
                 joined = "\n".join(texts).strip()
                 if joined:
-                    entries.append((r.get("timestamp"), "human", joined, after_assistant))
+                    _record_entry(r.get("timestamp"), "human", joined)
     if not entries:
         lines.append("- none recorded")
     else:
-        for ts, label, text, prior_assistant in entries:
+        for ts, label, text, prior_assistant, tool_counts in entries:
             lines.append(f"- {fmt_dt(parse_ts(ts))} ({label}): {line_excerpt(text, 500)}")
             if prior_assistant:
                 lines.append(f"  after assistant: {line_excerpt(prior_assistant, 300)}")
+            if tool_counts:
+                summary = ", ".join(
+                    f"{name}×{count}"
+                    for name, count in sorted(tool_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+                )
+            else:
+                summary = "none"
+            lines.append(f"  tool uses since previous human message: {summary}")
     lines.append("")
     return lines
 
