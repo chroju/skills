@@ -58,12 +58,23 @@ disable-model-invocation: true
 
 | Label | Grounds it in | Notes |
 |---|---|---|
-| Non-application | facts' `Expected but not loaded`, `Hook errors`, `Configured hooks with no run record` | name the hook command / material and the count where the facts give one; give each entry in facts' `Hook errors` its own finding, a blocking refusal included |
+| Non-application | facts' `Hook errors`, `Configured hooks with no run record`, or a Rule/CLAUDE.md judged not applied (see below) | name the hook command / material and the count where the facts give one; give each entry in facts' `Hook errors` its own finding, a blocking refusal included |
 | Non-compliance | a human message that corrects the assistant on something a loaded instruction already covered | |
 | Drift | a version, auto-mode-flag, or system-prompt difference — within the session, or vs. the previous session (facts' `Drift vs previous session`) | |
 | Wording | another finding's root cause is how an instruction is phrased (ambiguous, contradicts another instruction, buried, missing an example, a weak Skill description) | Evidence quotes the current text verbatim; Proposed change quotes the full replacement text verbatim |
 | Opportunity | repeated manual work, repeated permission waits, or a material that went unused or is redundant | |
 | Rework | the human had work redone or the approach changed, including the same mistake repeated | quote the point; may be unrelated to any harness material; human messages with no assistant tool use or reply between them are one point, however different their wording — only messages the assistant actually acted or replied between are separate points; cap at 5, the ones that caused the most rework — see Report format for the overflow line |
+
+Judge a Rule or CLAUDE.md **not applied** yourself from `## Instruction
+materials`: some touched file — a `### Touched files` path, or a path you
+can read from a `### Bash commands` entry (resolve a relative one against
+a `cd` earlier in the same command) — falls under it (a Rule's `paths:`
+globs, or a CLAUDE.md's directory and below), and that material is absent
+from `## Loaded instructions`. Only the Read tool triggers these loads; a
+Rule with no `paths:` loads at startup instead, so it's never "not
+applied" this way. Target is the material's real path as listed. In a
+multi-session report, count `Occurred in` yourself by matching the same
+not-applied material across sessions.
 
 A **Rework** point is any human message — including an AskUserQuestion
 answer, whose preceding assistant text the facts show — that rejects,
