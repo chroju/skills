@@ -61,7 +61,7 @@ disable-model-invocation: true
 | Drift | a version, auto-mode-flag, or system-prompt difference — within the session, or vs. the previous session (facts' `Drift vs previous session`) | |
 | Wording | another finding's root cause is how an instruction is phrased (ambiguous, contradicts another instruction, buried, missing an example, a weak Skill description) | Evidence quotes the current text verbatim; Proposed change quotes the full replacement text verbatim |
 | Opportunity | repeated manual work, repeated permission waits, or a material that went unused or is redundant | |
-| Rework | the human had work redone or the approach changed, including the same mistake repeated | quote the point; may be unrelated to any harness material; consecutive messages making the same correction count as one point; report at most 5 — the ones that caused the most rework — one finding per point; if more exist, add one line after the findings giving the count and timestamps of the rest |
+| Rework | the human had work redone or the approach changed, including the same mistake repeated | quote the point; may be unrelated to any harness material; consecutive messages making the same correction count as one point; cap at 5, the ones that caused the most rework — see Report format for the overflow line |
 
 **Target** is the harness material the finding is about — the resolved
 real path the facts already give for it (a CLAUDE.md, a Rule, a Skill's
@@ -87,7 +87,7 @@ targets that Rule's file, never "the assistant's own behavior."
 | Absent materials | <the exact paths the script's # Environment section lists as absent, copied verbatim, or "none"> |
 
 ### Harness
-#### <n>. <Label> | confidence: <high|medium|low>
+#### <n>. <Label> | <Confidence>: <level>
 **<one-line summary>**
 - Evidence: <quote, or the record it is based on>
 - Cause: <why this is happening>
@@ -96,14 +96,22 @@ targets that Rule's file, never "the assistant's own behavior."
 - Occurred in: <k>/<total> sessions (<ids>)   ← only in a multi-session report, only when this same finding recurred
 ```
 
-The other four sections — Settings and hooks, Instructions, Skills and
-commands, Workflow — use the same `#### <n>. <Label> | confidence: ...`
-block shown above for Harness. Section order is always Harness, Settings
-and hooks, Instructions, Skills and commands, Workflow; print a heading
-only for a section that has at least one finding — a run with findings in
-two sections prints exactly those two headings, not all five. Workflow is
-the only section whose Target may be `none`. Number findings sequentially
-across the whole report.
+`<Confidence>: <level>` is a placeholder like the rest of the block, not
+literal English to copy verbatim — translate it the same as every field
+label (see the translation example below). The other four sections —
+Settings and hooks, Instructions, Skills and commands, Workflow — use the
+same block shown above for Harness. Section order is always Harness,
+Settings and hooks, Instructions, Skills and commands, Workflow; print a
+heading only for a section that has at least one finding — a run with
+findings in two sections prints exactly those two headings, not all five.
+Workflow is the only section whose Target may be `none`. Number findings
+sequentially across the whole report. Right after Workflow's findings, add
+one more line before the closing lines, but only when Workflow was capped
+at 5 Rework findings and further redo/redirect points exist:
+
+```
+<only when more than 5 Rework points exist: one line — "N more redo/redirect points: <timestamps>">
+```
 
 The report always ends with exactly one or two lines — never more, never
 different ones, even when there are no findings:
@@ -152,3 +160,4 @@ everything below, not only section and issue-label names:
 | Harness / Settings and hooks / Instructions / Skills and commands / Workflow | ハーネス本体 / 設定・フック / Rules・CLAUDE.md / スキル・コマンド / 作業手順 |
 | Non-application / Non-compliance / Drift / Wording / Opportunity / Rework | 未適用 / 不遵守 / 仕様変化 / 記述不備 / 改善余地 / 手戻り |
 | "not recorded" / "no previous session transcript" / "changed during session" | 「記録なし」/「直前のセッションの記録なし」/「セッション中に変化」 |
+| none (a field's value, e.g. Target for a Workflow finding) | なし |
