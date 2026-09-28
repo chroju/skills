@@ -43,7 +43,9 @@ disable-model-invocation: true
    specifies a response language, use it for the *whole* report — the
    title, every table header, field label, and fixed phrase, not just
    section and issue-label names (see the translation example below).
-   Otherwise use the conversation's language.
+   Otherwise use the conversation's language. Every fixed value, including
+   the word `none` wherever it appears, is written in that same language
+   too.
 
 4. Turn the facts into findings using the table below. Every finding needs
    evidence: a quoted transcript excerpt or a named record (e.g. "hook_error
@@ -56,7 +58,7 @@ disable-model-invocation: true
 
 | Label | Grounds it in | Notes |
 |---|---|---|
-| Non-application | facts' `Expected but not loaded`, `Hook errors`, `Configured hooks with no run record` | name the hook command / material and the count where the facts give one |
+| Non-application | facts' `Expected but not loaded`, `Hook errors`, `Configured hooks with no run record` | name the hook command / material and the count where the facts give one; give each entry in facts' `Hook errors` its own finding, a blocking refusal included |
 | Non-compliance | a human message that corrects the assistant on something a loaded instruction already covered | |
 | Drift | a version, auto-mode-flag, or system-prompt difference — within the session, or vs. the previous session (facts' `Drift vs previous session`) | |
 | Wording | another finding's root cause is how an instruction is phrased (ambiguous, contradicts another instruction, buried, missing an example, a weak Skill description) | Evidence quotes the current text verbatim; Proposed change quotes the full replacement text verbatim |
@@ -69,7 +71,10 @@ replaces, or declines what the assistant just proposed or did: an explicit
 correction, a counter-proposal, picking a non-recommended option, or
 asking to reconsider, after which the assistant redid or re-proposed.
 Describe only the redo the facts actually show — never invent a
-reimplementation, edit, or reply that isn't in them. Like every finding,
+reimplementation, edit, or reply that isn't in them, and never describe a
+redo that comes before the human message it's attributed to (check the
+facts' order and the next message's "tool uses since previous human
+message"); attribute each redo to exactly one point. Like every finding,
 a Rework finding still fills in all of summary, Evidence, Cause, Target,
 Proposed change, and confidence — Target is usually `none`, but Cause
 (why the redo happened) is never blank.
@@ -123,7 +128,7 @@ one more line before the closing lines, but only when Workflow was capped
 at 5 Rework findings and further redo/redirect points exist:
 
 ```
-<only when more than 5 Rework points exist: one line — "N more redo/redirect points: <timestamps>">
+<only when more than 5 Rework points exist: one line, translated like the rest of the report — "<N> more redo/redirect points: <timestamps>">
 ```
 
 The report always ends with exactly one or two lines — never more, never
@@ -176,3 +181,4 @@ everything below, not only section and issue-label names:
 | none (a field's value, e.g. Target for a Workflow finding) | なし |
 | "Claude Code itself (release 2.1.283)" (example named Target) | 「Claude Code 本体（リリース 2.1.283）」 |
 | "this environment's network egress allowlist" (example named Target) | 「この環境のネットワーク egress 許可リスト」 |
+| "N more redo/redirect points: <timestamps>" (overflow line) | 「ほかに N 件の手戻り／方針転換: <時刻>」 |
