@@ -72,7 +72,8 @@ a `cd` earlier in the same command) — falls under it (a Rule's `paths:`
 globs, or a CLAUDE.md's directory and below), and that material is absent
 from `## Loaded instructions`. Only the Read tool triggers these loads; a
 Rule with no `paths:` loads at startup instead, so it's never "not
-applied" this way. Target is the material's real path as listed. In a
+applied" this way, and neither is a CLAUDE.md in an ancestor directory of
+the session's cwd (also loaded at startup). Target is the material's real path as listed. In a
 multi-session report, count `Occurred in` yourself by matching the same
 not-applied material across sessions.
 
