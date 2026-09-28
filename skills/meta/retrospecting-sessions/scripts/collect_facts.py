@@ -471,18 +471,28 @@ def expected_not_loaded(records, materials, project_dir):
 # ---------------------------------------------------------------------------
 
 _WRITE_TOKEN_RE = re.compile(
-    r"\bsed\s+-i\b|\bperl\s+-i\b|\btee\b|\bmv\b|\bcp\b|\brm\b|\btouch\b|<<-?~?\s*[\"']?\w+"
+    r"\bsed\s+-i\b|\bperl\s+-i\b|\btee\b|\bmv\b|\bcp\b|\brm\b|\btouch\b"
 )
+
+
+def has_file_redirect(cmd):
+    """True if `cmd` redirects output to a real file (`>`, `>>`, `&>`), as
+    opposed to duplicating a file descriptor (`2>&1`, `>&2`) or discarding
+    to /dev/null. A bare heredoc (`<<EOF`) is not itself a redirect: it only
+    counts here when it appears alongside an actual `>`/`>>` target, e.g.
+    `cat > out.txt <<EOF` or `cat <<EOF > out.txt`."""
+    for m in re.finditer(r">{1,2}", cmd):
+        rest = cmd[m.end():].lstrip()
+        if rest.startswith("&") or rest.startswith("/dev/null"):
+            continue
+        return True
+    return False
 
 
 def is_write_command(cmd):
     if _WRITE_TOKEN_RE.search(cmd):
         return True
-    for m in re.finditer(r">{1,2}", cmd):
-        rest = cmd[m.end():].lstrip()
-        if not rest.startswith("/dev/null"):
-            return True
-    return False
+    return has_file_redirect(cmd)
 
 
 def bash_write_commands(records):
@@ -898,6 +908,63 @@ def render_instruction_coverage(records, materials, project_dir):
     return lines, findings
 
 
+# Whole-message harness tags: a `type:"user"` string record made up only of
+# one of these blocks is injected by the harness, not typed by a person.
+_HARNESS_ONLY_TAGS = (
+    "task-notification",
+    "system-reminder",
+    "local-command-stdout",
+    "local-command-stderr",
+)
+_HARNESS_TAG_RES = [
+    re.compile(rf"^<{tag}>.*</{tag}>$", re.S) for tag in _HARNESS_ONLY_TAGS
+]
+_COMMAND_MARKUP_RE = re.compile(
+    r"<command-(?:message|name|args)>.*?</command-(?:message|name|args)>", re.S
+)
+_COMMAND_MARKUP_PRESENT_RE = re.compile(r"<command-(?:message|name|args)>")
+
+# The harness appends one of these fixed sentences after an AskUserQuestion
+# answer; they are boilerplate, not part of what the user said.
+_ASKUSERQUESTION_BOILERPLATE_RES = [
+    re.compile(
+        r"\s*Read the answers carefully\b.*?actually say\.?\s*$", re.S
+    ),
+    re.compile(
+        r"\s*You can now continue with these answers in mind\.?\s*$", re.S
+    ),
+]
+
+
+def is_harness_injected_message(record, content):
+    """True for a `type:"user"` string-content record that is harness
+    plumbing rather than something a person typed: a record whose
+    `origin.kind` is set to something other than "human" (task
+    notifications, peer-session messages, ...), or whose entire text is one
+    of the harness tag blocks, or pure slash-command markup with no other
+    text."""
+    origin = record.get("origin")
+    origin_kind = origin.get("kind") if isinstance(origin, dict) else None
+    if origin_kind is not None and origin_kind != "human":
+        return True
+    text = content.strip()
+    if not text:
+        return False
+    for pat in _HARNESS_TAG_RES:
+        if pat.match(text):
+            return True
+    if _COMMAND_MARKUP_PRESENT_RE.search(text):
+        if _COMMAND_MARKUP_RE.sub("", text).strip() == "":
+            return True
+    return False
+
+
+def strip_askuserquestion_boilerplate(text):
+    for pat in _ASKUSERQUESTION_BOILERPLATE_RES:
+        text = pat.sub("", text)
+    return text.strip()
+
+
 def render_human_messages(records):
     lines = ["## Human messages", ""]
     tu_idx = tool_use_index(records)
@@ -909,13 +976,18 @@ def render_human_messages(records):
             continue
         content = r.get("message", {}).get("content")
         if isinstance(content, str) and "toolUseResult" not in r:
+            if is_harness_injected_message(r, content):
+                continue
             entries.append((r.get("timestamp"), "human", content))
         elif isinstance(content, list):
             for c in content:
                 if isinstance(c, dict) and c.get("type") == "tool_result":
                     tu = tu_idx.get(c.get("tool_use_id"), {})
                     if tu.get("name") == "AskUserQuestion":
-                        entries.append((r.get("timestamp"), "AskUserQuestion answer", c.get("content")))
+                        text = c.get("content")
+                        if isinstance(text, str):
+                            text = strip_askuserquestion_boilerplate(text)
+                        entries.append((r.get("timestamp"), "AskUserQuestion answer", text))
     if not entries:
         lines.append("- none recorded")
     else:
