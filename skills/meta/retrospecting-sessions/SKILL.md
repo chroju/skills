@@ -39,17 +39,31 @@ disable-model-invocation: true
    environment, and never base a finding on one — copy its listed paths
    verbatim into the report, don't paraphrase them.
 
-3. Decide the report's language: if any loaded instruction's text
+3. If the output has a `### Bash write candidates (unclassified)` section
+   (the classifier was unavailable when the script ran), classify those
+   commands yourself before judging Non-application: with an Agent/Task
+   subagent tool, launch exactly one subagent (`model: "haiku"`), giving it
+   only the candidate commands, and ask for each: "Does this command
+   create, overwrite, append to, or modify the contents of a file on disk?
+   (deleting files, writing only to /dev/null or a pipe = no)" — a yes/no
+   per command. With no subagent tool available, answer that same question
+   yourself instead. Count only the "yes" answers as Bash writes when
+   judging "Hooks bypassed by Bash edits" (a Write/Edit-matching hook with
+   ≥1 Bash write), and say in that finding's Evidence whether the count
+   came from the script's own classifier (a `### Bash write commands`
+   section) or this fallback.
+
+4. Decide the report's language: if any loaded instruction's text
    specifies a response language, use it for the *whole* report — the
    title, every table header, field label, and fixed phrase, not just
    section and issue-label names (see the translation example below).
    Otherwise use the conversation's language.
 
-4. Turn the facts into findings using the table below. Every finding needs
+5. Turn the facts into findings using the table below. Every finding needs
    evidence: a quoted transcript excerpt or a named record (e.g. "hook_error
    attachment, PostToolUse"). Skip anything you can't ground this way.
 
-5. Print the report below, then stop — do not write it to a file, open an
+6. Print the report below, then stop — do not write it to a file, open an
    editor, or post it anywhere.
 
 ## Finding labels
