@@ -496,17 +496,46 @@ def claude_md_up_from(start_dir, stop_dirs):
     return found
 
 
-def claude_md_files_for(touched, project_dir, config_dir):
+_ABS_PATH_TOKEN_RE = re.compile(r"~/[^\s\"'<>|;&()]+|/[^\s\"'<>|;&()]+")
+
+
+def bash_absolute_paths(records):
+    """Existing absolute (or `~/`) file/dir arguments found via a plain
+    token scan of every Bash command — no shell parsing, no `cd`
+    tracking, no relative paths — so a directory only ever reached
+    through Bash (`cd /some/dir && ...`, `cat /some/dir/file`) still
+    surfaces its CLAUDE.md ancestors."""
+    found = []
+    for r, c in iter_tool_uses(records):
+        if c.get("name") != "Bash":
+            continue
+        cmd = tool_input(c).get("command")
+        if not isinstance(cmd, str):
+            continue
+        for tok in _ABS_PATH_TOKEN_RE.findall(cmd):
+            p = Path(os.path.expanduser(tok))
+            try:
+                if p.exists():
+                    found.append(resolve_best_effort(p))
+            except OSError:
+                continue
+    return found
+
+
+def claude_md_files_for(touched, bash_abs_paths, project_dir, config_dir):
     """Nested CLAUDE.md under the project dir, plus CLAUDE.md in the
-    ancestor directories of touched (tool-reached) files, up to but not
-    including the user's home directory or the filesystem root — never
-    the config dir's own CLAUDE.md (user memory, not a project material).
-    Each is labelled inside or outside the project dir."""
+    ancestor directories of touched (tool-reached) files and of existing
+    absolute paths seen in Bash commands, up to but not including the
+    user's home directory or the filesystem root — never the config
+    dir's own CLAUDE.md (user memory, not a project material). Each is
+    labelled inside or outside the project dir."""
     config_claude_md = resolve_best_effort(config_dir / "CLAUDE.md")
     stop_dirs = {resolve_best_effort(Path.home()), Path(project_dir.anchor)}
     all_paths = set(resolve_best_effort(f) for f in find_nested_claude_md(project_dir))
     for t in touched:
         all_paths.update(claude_md_up_from(t["real"].parent, stop_dirs))
+    for p in bash_abs_paths:
+        all_paths.update(claude_md_up_from(p if p.is_dir() else p.parent, stop_dirs))
     all_paths.discard(config_claude_md)
     result = []
     for real in sorted(all_paths, key=str):
@@ -964,9 +993,10 @@ def render_instruction_materials(combined_records, rules, project_dir, config_di
     lines.append("")
 
     touched = touched_files(combined_records, project_dir)
+    bash_abs_paths = bash_absolute_paths(combined_records)
 
     lines.append("### CLAUDE.md files")
-    claude_files = claude_md_files_for(touched, project_dir, config_dir)
+    claude_files = claude_md_files_for(touched, bash_abs_paths, project_dir, config_dir)
     if claude_files:
         for cf in claude_files:
             lines.append(f"- `{cf['path']}` ({cf['location']})")
