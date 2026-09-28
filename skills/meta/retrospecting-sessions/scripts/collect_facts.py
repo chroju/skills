@@ -56,6 +56,20 @@ def trunc(value, limit):
     return s[:limit] + "…"
 
 
+def single_line(value):
+    """Collapse any embedded newlines so a printed excerpt can never start a
+    line with `#` (or anything else) that would read as one of this
+    script's own Markdown headings — a heredoc body is the common source."""
+    s = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    s = s.replace("\r\n", "\n").replace("\r", "\n")
+    return " ⏎ ".join(s.split("\n"))
+
+
+def line_excerpt(value, limit):
+    """A truncated, single-line excerpt safe to embed in a bullet line."""
+    return single_line(trunc(value, limit))
+
+
 def parse_ts(s):
     if not s:
         return None
@@ -376,16 +390,34 @@ def extract_path_tokens(cmd):
     return [t for t in tokens if ("/" in t or "." in t) and not t.startswith("-")]
 
 
-def resolve_existing(tok, project_dir):
+def resolve_existing(tok, base_dir):
     p = Path(tok)
     if not p.is_absolute():
-        p = project_dir / p
+        p = base_dir / p
     try:
         if p.exists():
             return resolve_best_effort(p)
     except OSError:
         pass
     return None
+
+
+_LEADING_CD_RE = re.compile(r"^\s*cd\s+(\S+)\s*(?:&&|;)")
+
+
+def bash_effective_base_dir(cmd, project_dir):
+    """The directory a Bash command's relative paths resolve against: the
+    project dir, unless the command starts with `cd <dir> &&`/`cd <dir> ;`,
+    in which case it is that target (absolute, `~`-expanded, or itself
+    relative to the project dir)."""
+    m = _LEADING_CD_RE.match(cmd)
+    if not m:
+        return project_dir
+    target = os.path.expanduser(m.group(1))
+    p = Path(target)
+    if not p.is_absolute():
+        p = project_dir / p
+    return p
 
 
 def touched_files(records, project_dir):
@@ -411,15 +443,67 @@ def touched_files(records, project_dir):
                     })
             elif name == "Bash":
                 cmd = inp.get("command", "")
+                base_dir = bash_effective_base_dir(cmd, project_dir)
                 for tok in extract_path_tokens(cmd):
-                    real = resolve_existing(tok, project_dir)
+                    real = resolve_existing(tok, base_dir)
                     if real:
                         touched.append({
                             "real": real,
-                            "how": f"Bash (`{trunc(cmd, 120)}`)",
+                            "how": f"Bash (`{line_excerpt(cmd, 120)}`)",
                             "raw": tok,
                         })
     return touched
+
+
+def claude_md_up_from(start_dir, stop_dirs):
+    """CLAUDE.md files found walking up from start_dir (inclusive) until,
+    but not including, any directory in stop_dirs."""
+    found = []
+    seen = set()
+    cur = resolve_best_effort(start_dir)
+    while cur not in seen:
+        seen.add(cur)
+        if cur in stop_dirs:
+            break
+        candidate = cur / "CLAUDE.md"
+        if candidate.is_file():
+            found.append(resolve_best_effort(candidate))
+        parent = cur.parent
+        if parent == cur:
+            break  # filesystem root
+        cur = parent
+    return found
+
+
+def external_claude_md_materials(touched, project_dir, config_dir):
+    """Nested-CLAUDE.md-style materials for touched files that fall outside
+    project_dir: walk each one's directory chain up to (not including) the
+    user's home directory or the filesystem root, skipping the config
+    dir's own CLAUDE.md (user memory, not a project material)."""
+    project_real = resolve_best_effort(project_dir)
+    config_claude_md = resolve_best_effort(config_dir / "CLAUDE.md")
+    stop_dirs = {resolve_best_effort(Path.home()), Path(project_real.anchor)}
+    seen_paths = set()
+    materials = []
+    for t in touched:
+        real = t["real"]
+        try:
+            real.relative_to(project_real)
+            continue  # inside the project dir; handled by materials_list()
+        except ValueError:
+            pass
+        for cand in claude_md_up_from(real.parent, stop_dirs):
+            if cand == config_claude_md or cand in seen_paths:
+                continue
+            seen_paths.add(cand)
+            materials.append({
+                "kind": "nested_claude",
+                "display": cand,
+                "path": cand,
+                "dir": cand.parent,
+                "outside_project": True,
+            })
+    return materials
 
 
 def load_record_paths(records):
@@ -436,11 +520,12 @@ def load_record_paths(records):
     return paths
 
 
-def expected_not_loaded(records, materials, project_dir):
+def expected_not_loaded(records, materials, project_dir, config_dir):
     loaded = load_record_paths(records)
     touched = touched_files(records, project_dir)
+    all_materials = materials + external_claude_md_materials(touched, project_dir, config_dir)
     findings = []
-    for mat in materials:
+    for mat in all_materials:
         if mat["path"] in loaded:
             continue
         matches = []
@@ -657,12 +742,13 @@ def render_environment(config_dir, project_dir):
     return lines, set(absent)
 
 
-def render_overview(session_id, records, project_dir):
+def render_overview(session_id, records, project_dir, transcript_path):
     first_ts, last_ts = session_span(records)
     cwd = first_field(records, "cwd")
     entrypoint = first_field(records, "entrypoint")
     lines = ["## Overview", ""]
     lines.append(f"- Session ID: {session_id}")
+    lines.append(f"- Transcript: {resolve_best_effort(transcript_path)}")
     lines.append(f"- Start: {fmt_dt(first_ts)}")
     lines.append(f"- End: {fmt_dt(last_ts)}")
     lines.append(f"- cwd: {cwd or 'unknown'}")
@@ -827,7 +913,7 @@ def render_tool_use(records):
     writes = bash_write_commands(records)
     lines.append(f"- Bash write commands: {len(writes)}")
     for w in writes[:20]:
-        lines.append(f"  - {fmt_dt(parse_ts(w['timestamp']))}: `{trunc(w['command'], 200)}`")
+        lines.append(f"  - {fmt_dt(parse_ts(w['timestamp']))}: `{line_excerpt(w['command'], 200)}`")
     if len(writes) > 20:
         lines.append(f"  - … ({len(writes) - 20} more)")
     lines.append("")
@@ -868,7 +954,7 @@ def render_hooks(records, hook_entries, bash_writes):
     if errs:
         for e in errs:
             label = e.get("command") or e.get("hookName") or "(unknown hook)"
-            lines.append(f"- Hook error: `{label}` (event={e.get('event')}) — stderr: \"{trunc(e.get('text', ''), 300)}\"")
+            lines.append(f"- Hook error: `{label}` (event={e.get('event')}) — stderr: \"{line_excerpt(e.get('text', ''), 300)}\"")
     else:
         lines.append("- none recorded")
 
@@ -884,9 +970,9 @@ def render_hooks(records, hook_entries, bash_writes):
     return lines, bypassed, errs, no_run
 
 
-def render_instruction_coverage(records, materials, project_dir):
+def render_instruction_coverage(records, materials, project_dir, config_dir):
     lines = ["## Instruction coverage", ""]
-    findings = expected_not_loaded(records, materials, project_dir)
+    findings = expected_not_loaded(records, materials, project_dir, config_dir)
     if not materials:
         lines.append("- no Rules or nested CLAUDE.md found")
     else:
@@ -899,9 +985,10 @@ def render_instruction_coverage(records, materials, project_dir):
         for f in findings:
             mat = f["material"]
             kind = "Rule" if mat["kind"] == "rule" else "nested CLAUDE.md"
-            lines.append(f"- {kind} `{mat['path']}`: expected but not loaded")
+            suffix = " (outside project dir)" if mat.get("outside_project") else ""
+            lines.append(f"- {kind} `{mat['path']}`{suffix}: expected but not loaded")
             for t in f["touches"]:
-                lines.append(f"  - touched: `{t['raw']}` via {t['how']}")
+                lines.append(f"  - touched: `{line_excerpt(t['raw'], 200)}` via {t['how']}")
     else:
         lines.append("- none")
     lines.append("")
@@ -965,11 +1052,27 @@ def strip_askuserquestion_boilerplate(text):
     return text.strip()
 
 
+def last_assistant_text(content):
+    if not isinstance(content, list):
+        return None
+    texts = [
+        c.get("text") for c in content
+        if isinstance(c, dict) and c.get("type") == "text" and c.get("text")
+    ]
+    return texts[-1] if texts else None
+
+
 def render_human_messages(records):
     lines = ["## Human messages", ""]
     tu_idx = tool_use_index(records)
     entries = []
+    after_assistant = None
     for r in records:
+        if r.get("type") == "assistant":
+            text = last_assistant_text(r.get("message", {}).get("content"))
+            if text:
+                after_assistant = text
+            continue
         if r.get("type") != "user":
             continue
         if r.get("isMeta") or r.get("isCompactSummary"):
@@ -978,7 +1081,7 @@ def render_human_messages(records):
         if isinstance(content, str) and "toolUseResult" not in r:
             if is_harness_injected_message(r, content):
                 continue
-            entries.append((r.get("timestamp"), "human", content))
+            entries.append((r.get("timestamp"), "human", content, after_assistant))
         elif isinstance(content, list):
             for c in content:
                 if isinstance(c, dict) and c.get("type") == "tool_result":
@@ -987,12 +1090,14 @@ def render_human_messages(records):
                         text = c.get("content")
                         if isinstance(text, str):
                             text = strip_askuserquestion_boilerplate(text)
-                        entries.append((r.get("timestamp"), "AskUserQuestion answer", text))
+                        entries.append((r.get("timestamp"), "AskUserQuestion answer", text, after_assistant))
     if not entries:
         lines.append("- none recorded")
     else:
-        for ts, label, text in entries:
-            lines.append(f"- {fmt_dt(parse_ts(ts))} ({label}): {trunc(text, 500)}")
+        for ts, label, text, prior_assistant in entries:
+            lines.append(f"- {fmt_dt(parse_ts(ts))} ({label}): {line_excerpt(text, 500)}")
+            if prior_assistant:
+                lines.append(f"  after assistant: {line_excerpt(prior_assistant, 300)}")
     lines.append("")
     return lines
 
@@ -1013,7 +1118,7 @@ def render_tool_errors(records):
                 errors.append((r.get("timestamp"), tu.get("name", "?"), c.get("content")))
     lines.append(f"- Total: {len(errors)}")
     for ts, name, content in errors[:20]:
-        lines.append(f"  - {fmt_dt(parse_ts(ts))} {name}: {trunc(content, 200)}")
+        lines.append(f"  - {fmt_dt(parse_ts(ts))} {name}: {line_excerpt(content, 200)}")
     if len(errors) > 20:
         lines.append(f"  - … ({len(errors) - 20} more)")
     lines.append("")
@@ -1036,9 +1141,10 @@ def render_not_obtained(records):
 # Session rendering
 # ---------------------------------------------------------------------------
 
-def render_session(session_id, records, session_dir, project_dir, hook_entries, materials):
+def render_session(session_id, records, session_dir, project_dir, config_dir, hook_entries, materials):
+    transcript_path = session_dir / f"{session_id}.jsonl"
     lines = [f"# Session {session_id}", ""]
-    lines += render_overview(session_id, records, project_dir)
+    lines += render_overview(session_id, records, project_dir, transcript_path)
     lines += render_drift(records, session_dir, session_id)
     lines += render_loaded_instructions(records)
     lines += render_skills_and_commands(records)
@@ -1046,7 +1152,7 @@ def render_session(session_id, records, session_dir, project_dir, hook_entries, 
     lines += tool_lines
     hook_lines, bypassed, errs, no_run = render_hooks(records, hook_entries, bash_writes)
     lines += hook_lines
-    cov_lines, findings = render_instruction_coverage(records, materials, project_dir)
+    cov_lines, findings = render_instruction_coverage(records, materials, project_dir, config_dir)
     lines += cov_lines
     lines += render_human_messages(records)
     lines += render_tool_errors(records)
@@ -1056,7 +1162,7 @@ def render_session(session_id, records, session_dir, project_dir, hook_entries, 
     facts = {
         "expected_not_loaded": [str(f["material"]["path"]) for f in findings],
         "hooks_bypassed": [b["command"] for b in bypassed],
-        "hook_errors": [f"{e.get('command') or e.get('hookName')}|{trunc(e.get('text',''), 60)}" for e in errs],
+        "hook_errors": [single_line(f"{e.get('command') or e.get('hookName')}|{trunc(e.get('text',''), 60)}") for e in errs],
         "hooks_no_run": [h["command"] for h in no_run],
     }
     return lines, facts
@@ -1163,7 +1269,7 @@ def main(argv=None):
 
     per_session_facts = {}
     for sid in ordered_ids:
-        session_lines, facts = render_session(sid, sessions[sid], session_dir, project_dir, hook_entries, materials)
+        session_lines, facts = render_session(sid, sessions[sid], session_dir, project_dir, config_dir, hook_entries, materials)
         out += session_lines
         per_session_facts[sid] = facts
 
