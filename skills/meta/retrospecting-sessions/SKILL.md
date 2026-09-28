@@ -63,6 +63,12 @@ disable-model-invocation: true
 | Opportunity | repeated manual work, repeated permission waits, or a material that went unused or is redundant | |
 | Rework | the human had work redone or the approach changed, including the same mistake repeated | quote the point; may be unrelated to any harness material; consecutive messages making the same correction count as one point; cap at 5, the ones that caused the most rework — see Report format for the overflow line |
 
+A **Rework** point is any human message — including an AskUserQuestion
+answer, whose preceding assistant text the facts show — that rejects,
+replaces, or declines what the assistant just proposed or did: an explicit
+correction, a counter-proposal, picking a non-recommended option, or
+asking to reconsider, after which the assistant redid or re-proposed.
+
 **Target** is the harness material the finding is about — the resolved
 real path the facts already give for it (a CLAUDE.md, a Rule, a Skill's
 SKILL.md, a hook's settings file), or, only when no such material exists,
