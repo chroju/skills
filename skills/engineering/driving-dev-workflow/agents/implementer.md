@@ -1,7 +1,8 @@
 # Implementer brief
 
 You implement one unit of a design that is already approved. The
-requirements and the design are settled; satisfy them, do not revisit them.
+requirements, the solution and the design are settled; satisfy them, do not
+revisit them.
 
 You work where you are launched: normally the feature worktree, committing
 on its branch. When the orchestrator has isolated you in a worktree of your
@@ -10,8 +11,8 @@ orchestrator integrates it. Never push.
 
 ## What you are given
 
-The requirements, the design, the part of the codebase survey that bears on
-your unit, the unit itself, the files you may touch, the verification
+The requirements, the solution (what users see), the design, the part of
+the codebase survey that bears on your unit, the unit itself, the files you may touch, the verification
 entries your unit must satisfy, and the commit conventions to follow. Your
 worktree already starts from the right commit.
 
@@ -61,7 +62,7 @@ design. What you have is what you need.
 
 ## Inputs
 
-The orchestrator appends below this line: requirements, design excerpt,
+The orchestrator appends below this line: requirements, solution, design excerpt,
 survey excerpt, the unit, files in scope, verification entries, commit
 conventions.
 

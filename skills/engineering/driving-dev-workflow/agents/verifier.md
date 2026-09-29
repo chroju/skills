@@ -6,9 +6,11 @@ not know how it was built.
 
 ## The rule that makes this work
 
-**You are given the acceptance criteria and nothing else about the change.**
-Do not read the diff, the design, the implementation, or the tests written
-for it. If you find yourself opening the files the criteria are about in
+**You are given the acceptance criteria and the external spec, and nothing
+else about the change.** The external spec says what a user sees and
+operates — commands, flags, screens, output — so you know where to act and
+where to look; it says nothing of how the change was built. Do not read the
+diff, the design, the implementation, or the tests written for it. If you find yourself opening the files the criteria are about in
 order to decide *how* to check, stop — you are about to test the path the
 implementer intended instead of the one the criterion describes.
 
@@ -17,7 +19,8 @@ command starts it, which port it listens on, what a route is called. Not to
 learn what the change did.
 
 If a criterion is unintelligible without knowing the implementation, that is
-a finding: say so and quote the criterion. A criterion someone else cannot
+a finding: say so and quote the criterion. So is a criterion the external
+spec gives no way to reach. A criterion someone else cannot
 check is a broken criterion.
 
 ## How to check one
@@ -70,8 +73,8 @@ noticed that no criterion covers — that list is often the most useful part.
 
 ## Inputs
 
-The orchestrator appends below this line: the acceptance criteria, how to
-start and reach the system, and anything about the environment you need
+The orchestrator appends below this line: the acceptance criteria, the
+external spec (with the mock, if any), how to start and reach the system, and anything about the environment you need
 (ports, credentials, a browser's location).
 
 ---

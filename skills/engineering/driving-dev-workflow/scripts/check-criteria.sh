@@ -2,9 +2,11 @@
 # check-criteria.sh <requirements.md>
 #
 # Reads each acceptance criterion with jev, an outside reader that has not
-# seen the conversation, and asks three yes/no questions:
+# seen the conversation, and asks four yes/no questions:
 #   checkable   — could a stranger check it with a command, test or procedure?
 #   impl detail — does it say how the change is built instead of what is seen?
+#   solution    — does it fix the means (a flag, setting, screen, endpoint)
+#                 instead of stating only the situation and the outcome?
 #   vague       — does unmeasurable wording carry the requirement?
 # Prints a markdown table with the probabilities and a verdict per criterion.
 #
@@ -59,6 +61,14 @@ while IFS= read -r criterion; do
           false: "It names only behaviour, interfaces, commands, files, screens or outputs that a user or operator can see"
         }
       },
+      presumes_solution: {
+        type: "noul",
+        instructions: "Does `criterion` name a specific control or interface the user must operate to get the outcome, so that only one way of building the change could satisfy it?",
+        criteria: {
+          true: "It names the means: a particular flag, option, setting, config key, button, menu item, command or endpoint that produces the outcome",
+          false: "It states the situation and the outcome only; any command, screen or output it names is where the outcome is observed, not the means of producing it"
+        }
+      },
       vague: {
         type: "noul",
         instructions: "Does `criterion` rely on unmeasurable wording instead of stating the observable condition?",
@@ -73,28 +83,29 @@ while IFS= read -r criterion; do
   body=$(jev_call "$request") || jev_unavailable "$ME"
 
   probs=$(printf '%s' "$body" | jq -r '
-    "\(.answers.checkable.noul) \(.answers.implementation_detail.noul) \(.answers.vague.noul)"')
-  read -r p_check p_impl p_vague <<EOF
+    "\(.answers.checkable.noul) \(.answers.implementation_detail.noul) \(.answers.presumes_solution.noul) \(.answers.vague.noul)"')
+  read -r p_check p_impl p_sol p_vague <<EOF
 $probs
 EOF
 
-  verdict=$(awk -v a="$p_check" -v b="$p_impl" -v c="$p_vague" -v t="$T" 'BEGIN {
+  verdict=$(awk -v a="$p_check" -v b="$p_impl" -v s="$p_sol" -v c="$p_vague" -v t="$T" 'BEGIN {
     r = ""
     if (a + 0 < t + 0)  r = r "not checkable; "
     if (b + 0 >= t + 0) r = r "implementation detail; "
+    if (s + 0 >= t + 0) r = r "presumes a solution; "
     if (c + 0 >= t + 0) r = r "vague; "
     if (r == "") print "ok"; else { sub(/; $/, "", r); print r }
   }')
   [ "$verdict" != ok ] && flagged=$((flagged + 1))
 
-  table+=$(printf '| %d | %.2f | %.2f | %.2f | %s | %s |' \
-    "$i" "$p_check" "$p_impl" "$p_vague" "$verdict" "$(md_cell "$criterion")")$'\n'
+  table+=$(printf '| %d | %.2f | %.2f | %.2f | %.2f | %s | %s |' \
+    "$i" "$p_check" "$p_impl" "$p_sol" "$p_vague" "$verdict" "$(md_cell "$criterion")")$'\n'
 done <<EOF
 $CRITERIA
 EOF
 
-echo "| # | checkable | impl detail | vague | verdict | criterion |"
-echo "| --- | --- | --- | --- | --- | --- |"
+echo "| # | checkable | impl detail | solution | vague | verdict | criterion |"
+echo "| --- | --- | --- | --- | --- | --- | --- |"
 printf '%s' "$table"
 echo
 echo "$i criteria, $flagged flagged (threshold $T)"
