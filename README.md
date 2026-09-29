@@ -12,7 +12,7 @@ gh skill install chroju/skills <skill-name>
 
 | Skill | Description |
 |-------|-------------|
-| [engineering/driving-dev-workflow](./skills/engineering/driving-dev-workflow/) | Development task as requirements → design → red/green implementation → review → PR and CI, with explicit approval gates and subagent delegation |
+| [engineering/driving-dev-workflow](./skills/engineering/driving-dev-workflow/) | Development task as requirements → solution → design → red/green implementation → review → PR and CI, with explicit approval gates and subagent delegation |
 | [engineering/driving-git-workflow](./skills/engineering/driving-git-workflow/) | Git workflow from worktree-based branching through commits, PRs, CI fix loops, and merge with cleanup |
 | [engineering/managing-dependencies](./skills/engineering/managing-dependencies/) | Version selection, package vetting, and update-bot policy for third-party dependencies |
 | [engineering/writing-github-actions](./skills/engineering/writing-github-actions/) | Hardening and deploy rules for GitHub Actions workflows, with bundled validation (actionlint, zizmor, timeout/concurrency checks) and environment setup scripts |

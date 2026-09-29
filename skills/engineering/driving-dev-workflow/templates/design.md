@@ -2,13 +2,9 @@
 
 ## Summary
 
-<!-- The approach in a few sentences. Enough to predict the diff. -->
-
-## Mock
-
-<!-- Only when the change has a visual component. ASCII for terminal
-     output, a static HTML file or sketch for GUI. Agreed with the user
-     before the rest of the design. Delete the section otherwise. -->
+<!-- How the approved solution is built, in a few sentences. Enough to
+     predict the diff. What users see is fixed in the solution; do not
+     restate or change it here. -->
 
 ## Changes
 
@@ -16,14 +12,16 @@
 
 ### `<path>`
 
-## Data and interfaces
+## Internal data and interfaces
 
-<!-- New or changed data shapes, signatures, config keys, CLI flags.
-     Delete the section if nothing changes. -->
+<!-- New or changed internal data shapes, function signatures, storage
+     layout. External ones (flags, config keys, API shapes) are in the
+     solution. Delete the section if nothing changes. -->
 
 ## Verification plan
 
-<!-- One row per acceptance criterion. Tests in the repository's own style
+<!-- One row per acceptance criterion, driven through the solution's
+     external spec. Tests in the repository's own style
      if it has a framework; otherwise a reproducible command or procedure.
      Name the state the check runs in, not only the command: most missed
      bugs live in the gap between the feature at rest and the feature after
@@ -61,6 +59,7 @@
 
 ## Alternatives considered
 
-<!-- Rejected approaches and what ruled them out. -->
+<!-- Rejected ways of building the chosen solution and what ruled them
+     out. Rejected solutions are in the solution document. -->
 
 - **<alternative>** — rejected because <reason>.

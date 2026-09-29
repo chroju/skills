@@ -1,7 +1,7 @@
 ---
 name: driving-dev-workflow
 argument-hint: '[what to build | issue number | (empty to resume)]'
-description: Drives a development task through requirements agreement, design, red/green implementation, review, and PR with CI — autonomously except where a human decision is needed, with codebase reading and implementation delegated to subagents. Invoke with /driving-dev-workflow <what to build>, /driving-dev-workflow <issue number>, or /driving-dev-workflow with no arguments to resume an in-progress task.
+description: Drives a development task through requirements agreement, choice of solution, design, red/green implementation, review, and PR with CI — autonomously except where a human decision is needed, with codebase reading and implementation delegated to subagents. Invoke with /driving-dev-workflow <what to build>, /driving-dev-workflow <issue number>, or /driving-dev-workflow with no arguments to resume an in-progress task.
 license: MIT
 ---
 # Driving Dev Workflow
@@ -17,6 +17,28 @@ decide and proceed.
 Documents are written in the language of the conversation. Headings may
 stay in English to match the templates.
 
+## Three documents, three questions
+
+Each is agreed before the next is written, and each answers one question
+only:
+
+| Document | Answers | Holds |
+| --- | --- | --- |
+| Requirements | What must be true afterwards, and why? | The problem, the goal, constraints, acceptance criteria stated as situation and outcome |
+| Solution | Which way of getting there, and what does it look like from outside? | The candidates weighed, the one chosen, everything a user or caller sees: commands, flags, config keys, API shapes, output, screens, the mock |
+| Design | How is the chosen solution built? | Files, internal data, the verification plan, the landing plan, the work breakdown |
+
+To place a line, ask: would it stay true whichever solution were chosen?
+Then it is a requirement. Does it name something a user sees that another
+solution would not have? Solution. Can no user see it? Design.
+
+A request usually arrives as a solution — "add a `--mute` flag". Treat the
+named feature as one candidate, not as the requirement. The need behind it
+can often be met by building less: using something that already exists,
+removing or reducing something, or changing configuration or documentation.
+Those candidates are only visible if the requirements do not presuppose the
+feature.
+
 ## Subagents
 
 Two briefs ship with this skill. Read the file, then pass its whole text as
@@ -29,14 +51,15 @@ asks for.
 | Implementer — builds one unit red → green and commits | `agents/implementer.md` | `subagent_type: general-purpose`, `model: sonnet` |
 | Verifier — checks the acceptance criteria against the running system, knowing nothing about how it was built | `agents/verifier.md` | `subagent_type: general-purpose`, `model: opus` |
 
-The verifier is given the acceptance criteria and **not** the diff, the
-design, or the implementer's tests. That is the whole point of it: whoever
+The verifier is given the acceptance criteria and the solution's external
+spec — what a user sees and operates — and **not** the diff, the design, or
+the implementer's tests. That is the whole point of it: whoever
 wrote the code checks the path they meant to build, and so does anyone who
 has read their diff. Do not economise by folding this into the implementer
 or doing it yourself right after reviewing the change.
 
 Add `isolation: worktree` to an implementer launch only when running units
-in parallel (Step 3).
+in parallel (Step 4).
 
 ## Scripts
 
@@ -48,8 +71,8 @@ seen nothing of this conversation, and print a markdown table. They need
 
 | Script | Asks | Used in |
 | --- | --- | --- |
-| `scripts/check-criteria.sh <requirements.md>` | Per acceptance criterion: can a stranger check it with a command, test or procedure; does it describe how the change is built; does vague wording carry it | Step 1 |
-| `scripts/check-verification.sh <design.md> [requirements.md]` | Per verification-plan row: is the check aimed at its criterion, and could it fail on a system without the change; with the requirements, which criteria have no row | Step 2 |
+| `scripts/check-criteria.sh <requirements.md>` | Per acceptance criterion: can a stranger check it with a command, test or procedure; does it describe how the change is built; does it fix the means (a flag, setting, screen) instead of the outcome; does vague wording carry it | Step 1 |
+| `scripts/check-verification.sh <design.md> [requirements.md]` | Per verification-plan row: is the check aimed at its criterion, and could it fail on a system without the change; with the requirements, which criteria have no row | Step 3 |
 
 Exit 0 means nothing flagged, 1 that the table has flagged rows, 3 that jev
 could not be used — no key, network, rate limit — which the script says on
@@ -73,7 +96,7 @@ repository, and survives deleting a worktree.
 | --- | --- |
 | `state.json` | Progress, see below |
 | `context.md` | What the explorer reported about the codebase |
-| `requirements.md`, `design.md` | The agreed documents — unless `where` is an issue |
+| `requirements.md`, `solution.md`, `design.md` | The agreed documents — unless `where` is an issue |
 | `verify.md` | Red/green records from every implementation unit, then the verifier's report on the criteria |
 | `review.md` | Review findings and what was done about each |
 
@@ -89,12 +112,12 @@ repository, and survives deleting a worktree.
 }
 ```
 
-`phase` is `requirements` → `design` → `implement` → `review` → `pr` →
-`done`. Advance it as each step completes. `where` is `WORK` or
-`issue#<n>`: when the task started from an issue, requirements, design,
-and any mock are posted as comments on that issue; on revision, edit your
-own comment rather than adding another. Never rewrite the issue body — it
-may not be yours.
+`phase` is `requirements` → `solution` → `design` → `implement` → `review`
+→ `pr` → `done`. Advance it as each step completes. `where` is `WORK` or
+`issue#<n>`: when the task started from an issue, requirements, solution,
+design, and any mock are posted as comments on that issue; on revision,
+edit your own comment rather than adding another. Never rewrite the issue
+body — it may not be yours.
 
 ## Git operations
 
@@ -105,10 +128,10 @@ the job of a git workflow skill if one is loaded (for example
 `driving-git-workflow`). Follow it wherever the two overlap; the git
 instructions below are the fallback when no such skill is present.
 
-The main checkout is never switched. From Step 2 on you work in a feature
-worktree, and so do the implementers — they commit on the feature branch
-directly. Only when you run implementers in parallel does each get a
-worktree of its own, integrated and discarded afterwards.
+The main checkout is never switched. From the end of Step 3 on you work in
+a feature worktree, and so do the implementers — they commit on the
+feature branch directly. Only when you run implementers in parallel does
+each get a worktree of its own, integrated and discarded afterwards.
 
 ## Step 0: Start or resume
 
@@ -120,7 +143,7 @@ branch and resume at its `phase`. If none matches, look at the slugs whose
 phase is not `done`: one → confirm and resume it; several → ask which;
 none → ask what to build. When the resumed state has a `branch` and you
 are not in its worktree, move there first (EnterWorktree, or create it as
-in Step 2) — nothing after Step 2 runs from the main checkout.
+in Step 3) — nothing after Step 3 runs from the main checkout.
 
 **Argument.** If it is an issue number, read it with whatever GitHub access
 this session has — `gh`, a GitHub MCP tool, the API — and `where` is
@@ -140,17 +163,49 @@ that contradicts or complicates the request. Save its report as
 `WORK/context.md`. If it reports that it could not cover the repository,
 decide whether a second, narrower survey is needed.
 
-Now pin down what the user wants. Collect every ambiguity, edge case, and
-scope boundary and ask about them in one round, not one at a time; for the
-low-stakes ones, state the default you would take and let the user
-override. If the survey found a contradiction or a technical difficulty,
-raise it in the same round and settle the direction before writing
-anything.
+Use the survey to understand the problem and what any solution must
+respect, not to choose a solution. Technical difficulties it reports stay
+in `context.md` for Step 2 — they bear on how to meet the need, not on what
+the need is. Raise one now only when it limits what can be wanted at all.
+If the survey shows that something existing already meets the need, say so
+now: the task may end here.
+
+Now find out what the user actually wants. A request is the user's first
+guess at a solution, written quickly; the need is found by questioning it,
+critically and from several sides:
+
+- **The need behind the request.** If it names a feature, ask what it is
+  for: the situation the user is in when they want it, what they do today
+  instead, and what goes wrong.
+- **Who and how often.** Who runs into the problem, how often, and whether
+  it is temporary or permanent.
+- **What done looks like.** How the user would tell the problem is gone,
+  and what would still bother them about a result that technically does
+  what they asked.
+- **What must not change.** Behaviour, users or workflows the change has to
+  leave alone.
+- **Edges and scope.** Boundary values, repeated use, the interaction with
+  existing features, and what is deliberately left out.
+- **The premise.** Where the request contradicts itself, the survey, or a
+  mechanism that already does the job, say so plainly and ask — do not
+  quietly absorb it.
+
+Do not ask how to build it; that is Step 2. Ask in rounds: each round
+carries every question you have at that point, and the answers usually
+raise new ones, so keep going until a round raises nothing new. For
+low-stakes points, state the default you would take and let the user
+override — but never default on the need itself. If the user insists on a
+particular means ("it has to be a flag"), that is their call: record it as
+a constraint with their reason, not as a criterion.
 
 Write the requirements following `templates/requirements.md` (read the
 template first). The acceptance criteria are the goal of the whole task:
 each must be checkable by a command, a test, or a procedure that a stranger
-could run. No implementation detail belongs here. Save to `where`.
+could run, and each must hold whichever solution Step 2 chooses — state the
+situation and the observable outcome, never the flag, setting, screen or
+command that produces it. An existing command or output may be named as the
+place the outcome is observed. No implementation detail belongs here
+either. Save to `where`.
 
 Before presenting, run `scripts/check-criteria.sh` on the document
 (Scripts, above; when `where` is an issue, save the text you are about to
@@ -162,18 +217,41 @@ you will state.
 Present the document and wait for explicit approval. Only a direct "OK",
 "approved", "go ahead" counts; a question or a topic change does not. If
 `[OPEN:]` markers remain, resolve them first. On approval, set `phase` to
-`design`.
+`solution`.
 
-## Step 2: Design
+## Step 2: Solution
 
-Decide how to build it. Where a technical question needs evidence — how a
-library behaves, whether an API supports something, how an existing module
-is wired — launch the explorer in **research** mode with the question, and
-append the answer to `context.md`.
+Lay out the ways the requirements could be met. Include the one the user
+asked for, and look deliberately for ones that build less: an existing
+mechanism that already does it, removing or reducing whatever causes the
+problem, a change to configuration or documentation. Leave such a
+candidate out only when it plainly cannot meet the criteria, and say why.
 
-If the change has a visual component (GUI, TUI, CLI output layout), produce
-a mock before anything else: ASCII for terminal output, a rendered page or
-sketch for GUI. Draw it from the real design tokens the survey found —
+Where a candidate needs evidence — how a library behaves, whether an API
+supports something, how an existing module is wired — launch the explorer
+in **research** mode with the question, and append the answer to
+`context.md`. If feasibility is in doubt and a spike is cheap, run one:
+launch a `general-purpose` subagent with `isolation: worktree` and a narrow
+brief ("confirm that X can do Y; report the result, do not build
+anything"). Keep the finding, discard the branch.
+
+Present the candidates — for each, what it builds, which criteria it meets
+and how well, its cost and risk — with your recommendation, and let the
+user choose. The choice is theirs even when one candidate looks obvious. If
+the chosen candidate builds nothing because an existing mechanism already
+meets every criterion, show the user how, set `phase` to `done`, and stop.
+
+Write the solution following `templates/solution.md` (read the template
+first): the candidates and the choice, then the chosen solution's external
+spec — every command, flag, config key, API shape, output, message and
+screen a user or caller will meet, with exact names — and, per criterion,
+how a user reaches it through that surface. The verifier is given the
+external spec and nothing else of the change, so write it so that someone
+who has never seen the code could drive the system from it.
+
+If the change has a visual component (GUI, TUI, CLI output layout), the
+external spec includes a mock: ASCII for terminal output, a rendered page
+or sketch for GUI. Draw it from the real design tokens the survey found —
 the actual colours, spacing and type of the thing being changed — so that
 agreeing on the mock agrees on something true.
 
@@ -185,20 +263,24 @@ throwaway mock now and redrawing the same screen in the repository's format
 at the end means drawing it twice, and the second drawing has to be told to
 follow the implementation rather than the mock, because by then they differ.
 Only when the repository keeps no such drawings does the mock live in
-`WORK/` next to `design.md`, or in the design comment when `where` is an
+`WORK/` next to `solution.md`, or in the solution comment when `where` is an
 issue.
 
-Whatever its home, show the user a rendering they can actually look at, and
-agree on it; it becomes part of the design.
+Whatever its home, show the user a rendering they can actually look at.
 
-If feasibility is in doubt and a spike is cheap, run one: launch a
-`general-purpose` subagent with `isolation: worktree` and a narrow brief
-("confirm that X can do Y; report the result, do not build anything").
-Keep the finding, discard the branch.
+Present the solution and wait for explicit approval, by the same rule as
+Step 1. On approval, set `phase` to `design`.
+
+## Step 3: Design
+
+Decide how to build the approved solution. It fixes what users see; the
+design decides everything they do not. Research and spikes work as in
+Step 2.
 
 Write the design following `templates/design.md` (read the template first).
 The verification plan maps every acceptance criterion to the concrete test
-or command that proves it. If the repository has a test framework, tests go
+or command that proves it, driven through the solution's external surface.
+If the repository has a test framework, tests go
 in its style; if it has none, do not introduce one — use a reproducible
 command or procedure instead. The work breakdown splits the change into
 units an implementer can do alone, each with the files it may touch.
@@ -232,7 +314,22 @@ branch in `state.json` and set `phase` to `implement`. EnterWorktree moves
 the whole session, subagents included. The manual fallback does not: then
 give every subagent the worktree path and tell it to work there.
 
-## Step 3: Implement
+## Going back to an approved document
+
+An approved document can be overtaken: the user adds to or changes what
+they want in reply to a later step, research shows a criterion cannot be
+met, or the design cannot be built behind the agreed external surface. Stop
+and revise the earliest document the change reaches — requirements when
+what must be true changes, solution when what users see changes. Rerun its
+check, present the revision with what changed and why, and get approval
+again by the same rule as Step 1. Then bring every later document in line
+before continuing from where you were.
+
+Do not fold the change into the document you happen to be writing. The
+approved documents are the record, and a requirement that exists only in
+the solution or the design is one the verifier is never given.
+
+## Step 4: Implement
 
 Before the first implementer, run the repository's own checks yourself and
 watch them execute — the full test command, the linter, the type checker. An
@@ -243,11 +340,11 @@ repository's business — a setup script, a hook, a line in its own docs — not
 this skill's; but confirming it is yours.
 
 For each unit in the work breakdown, launch an implementer. Give it: the
-requirements, the design, the relevant part of `context.md`, its unit, the
-files it may touch, the verification entries it must satisfy, and the
-commit conventions to follow (from the survey, or from the git workflow
-skill's rules — the implementer does not see either on its own). Do not
-give it other units or this conversation.
+requirements, the solution, the design, the relevant part of `context.md`,
+its unit, the files it may touch, the verification entries it must
+satisfy, and the commit conventions to follow (from the survey, or from
+the git workflow skill's rules — the implementer does not see either on
+its own). Do not give it other units or this conversation.
 
 The default is serial: one implementer at a time, working in the feature
 worktree and committing on the feature branch. No integration step, linear
@@ -270,8 +367,8 @@ After each unit lands, run the full verification plan on the feature
 branch; a green that held for one unit must still hold with the others.
 Append each red/green record to `WORK/verify.md`. If an implementer
 reports a problem it could not solve inside its scope, decide: widen the
-scope and relaunch, split the unit, or bring it to the user if it changes
-the design.
+scope and relaunch, split the unit, or go back to the document it changes
+(above).
 
 An implementer verifies its own unit only in the narrow sense that matters
 to it: the check it was given went red, then green. That is not the same as
@@ -279,9 +376,10 @@ the acceptance criteria holding, and it cannot be — it is checking the path
 it just built.
 
 So when the units are in, launch the **verifier** against the running system
-with the acceptance criteria and nothing else. Give it how to start and
-reach the app, and the environment it needs — the port, a browser's location,
-credentials. Do not give it the diff, the design, or the tests. File its
+with the acceptance criteria and the solution's external spec (with the mock,
+if any), and nothing else. Give it how to start and reach the app, and the
+environment it needs — the port, a browser's location, credentials. Do not
+give it the diff, the design, or the tests. File its
 report in `verify.md` alongside the implementers' red/green records.
 
 A criterion it returns **not met** goes back to the implementer for that
@@ -292,7 +390,7 @@ verifier's own description of what they would have to do.
 
 When every criterion is met on the feature branch, set `phase` to `review`.
 
-## Step 4: Review
+## Step 5: Review
 
 First bring the base branch in. Fetch it and merge it into the feature
 branch, resolve whatever conflicts appear, and re-run the checks. A branch
@@ -319,7 +417,8 @@ Write every finding to `WORK/review.md` and sort each into one of three
 classes, with the evidence for the class next to it:
 
 - **A — the approved work is not done.** An acceptance criterion, a
-  requirement, or a decision in the design does not hold in the diff.
+  requirement, the solution's external spec, or a decision in the design
+  does not hold in the diff.
 - **B — this change broke something.** Behaviour that worked on `base` no
   longer works on the feature branch. Show it: the same input, the output
   on `base`, the output now.
@@ -347,12 +446,12 @@ the options (widen the scope, accept the limitation, or split it off). Do
 not paper over it with heuristics inside the scope: each heuristic breaks a
 different set of inputs, and every one of those is a new B.
 
-Show the user the list only if a finding changes the requirements or
-design, or needs the decision above; otherwise proceed.
+Show the user the list only if a finding changes an approved document
+(going back, above) or needs the decision above; otherwise proceed.
 
 Set `phase` to `pr`.
 
-## Step 5: PR and CI
+## Step 6: PR and CI
 
 Before pushing, look at the commit history on the feature branch. Each
 commit must be a unit someone could revert alone with verification still
@@ -368,8 +467,8 @@ in a file you happened to open — comes out and goes somewhere of its own.
 Push and create the PR the way the git workflow skill says (template,
 issue references, attribution). Whatever the shape, the body must carry:
 the requirements in summary with a link to `where` if it is an issue, the
-design decisions, how it was verified, and any review findings left alone
-with their reasons.
+solution chosen and the candidates set aside, the design decisions, how it
+was verified, and any review findings left alone with their reasons.
 
 Run the CI loop as the git workflow skill defines it, including its limit
 on fix attempts. Fallback without one: watch the checks with whatever GitHub
@@ -385,15 +484,20 @@ the PR by hand.
 
 ## Rules
 
-- No design before requirements are approved; no implementation before the
-  design is approved. There is no small-change exception.
-- Requirements and design always exist as documents in `where`. The
-  conversation is not the record.
+- No solution before requirements are approved, no design before the
+  solution is approved, no implementation before the design is approved.
+  There is no small-change exception.
+- Requirements hold for every solution; the solution fixes only what users
+  see; the design holds everything else.
+- Requirements, solution and design always exist as documents in `where`.
+  The conversation is not the record. When a later step changes an earlier
+  document, the earlier document is revised and approved again.
 - Verification comes before implementation: every unit starts red and ends
   green against the same check.
 - Whoever built a thing does not get to be the one who says it works. The
   implementer's red/green covers its own unit; the acceptance criteria are
-  checked by the verifier, which is not shown the diff. A check only a
+  checked by the verifier, which is shown the external spec but not the
+  design or the diff. A check only a
   person can run is performed by the user before review, never assumed.
 - Before review, the feature branch is brought up to date with its base.
 - Review fixes only what the approved work requires: unmet requirements and
