@@ -115,9 +115,9 @@ repository, and survives deleting a worktree.
 `phase` is `requirements` → `solution` → `design` → `implement` → `review`
 → `pr` → `done`. Advance it as each step completes. `where` is `WORK` or
 `issue#<n>`: when the task started from an issue, requirements, solution,
-design, and any mock are posted as comments on that issue; on revision, edit your
-own comment rather than adding another. Never rewrite the issue body — it
-may not be yours.
+design, and any mock are posted as comments on that issue; on revision,
+edit your own comment rather than adding another. Never rewrite the issue
+body — it may not be yours.
 
 ## Git operations
 
@@ -129,9 +129,9 @@ the job of a git workflow skill if one is loaded (for example
 instructions below are the fallback when no such skill is present.
 
 The main checkout is never switched. From the end of Step 3 on you work in
-a feature worktree, and so do the implementers — they commit on the feature branch
-directly. Only when you run implementers in parallel does each get a
-worktree of its own, integrated and discarded afterwards.
+a feature worktree, and so do the implementers — they commit on the
+feature branch directly. Only when you run implementers in parallel does
+each get a worktree of its own, integrated and discarded afterwards.
 
 ## Step 0: Start or resume
 
@@ -340,11 +340,11 @@ repository's business — a setup script, a hook, a line in its own docs — not
 this skill's; but confirming it is yours.
 
 For each unit in the work breakdown, launch an implementer. Give it: the
-requirements, the solution, the design, the relevant part of `context.md`, its unit, the
-files it may touch, the verification entries it must satisfy, and the
-commit conventions to follow (from the survey, or from the git workflow
-skill's rules — the implementer does not see either on its own). Do not
-give it other units or this conversation.
+requirements, the solution, the design, the relevant part of `context.md`,
+its unit, the files it may touch, the verification entries it must
+satisfy, and the commit conventions to follow (from the survey, or from
+the git workflow skill's rules — the implementer does not see either on
+its own). Do not give it other units or this conversation.
 
 The default is serial: one implementer at a time, working in the feature
 worktree and committing on the feature branch. No integration step, linear
@@ -467,8 +467,8 @@ in a file you happened to open — comes out and goes somewhere of its own.
 Push and create the PR the way the git workflow skill says (template,
 issue references, attribution). Whatever the shape, the body must carry:
 the requirements in summary with a link to `where` if it is an issue, the
-solution chosen and the candidates set aside, the design decisions, how it was verified, and any review findings left alone
-with their reasons.
+solution chosen and the candidates set aside, the design decisions, how it
+was verified, and any review findings left alone with their reasons.
 
 Run the CI loop as the git workflow skill defines it, including its limit
 on fix attempts. Fallback without one: watch the checks with whatever GitHub

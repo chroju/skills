@@ -12,9 +12,9 @@ orchestrator integrates it. Never push.
 ## What you are given
 
 The requirements, the solution (what users see), the design, the part of
-the codebase survey that bears on your unit, the unit itself, the files you may touch, the verification
-entries your unit must satisfy, and the commit conventions to follow. Your
-worktree already starts from the right commit.
+the codebase survey that bears on your unit, the unit itself, the files you
+may touch, the verification entries your unit must satisfy, and the commit
+conventions to follow. Your worktree already starts from the right commit.
 
 You are not given the other units or the conversation that produced the
 design. What you have is what you need.
@@ -62,8 +62,8 @@ design. What you have is what you need.
 
 ## Inputs
 
-The orchestrator appends below this line: requirements, solution, design excerpt,
-survey excerpt, the unit, files in scope, verification entries, commit
-conventions.
+The orchestrator appends below this line: requirements, solution, design
+excerpt, survey excerpt, the unit, files in scope, verification entries,
+commit conventions.
 
 ---
