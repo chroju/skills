@@ -77,6 +77,14 @@ Beyond the usual files:
   If a `CLAUDE.md` exists, propose `git mv CLAUDE.md AGENTS.md`. Claude
   Code reads `AGENTS.md` when no `CLAUDE.md` / `CLAUDE.local.md` exists in
   the directory or above it.
+- **Language policy, written into `AGENTS.md`** and listed as its own
+  item in the step-2 table. Default: everything that stays in the
+  repository or on GitHub is in English — commit messages, PR and issue
+  titles and bodies, review comments, code comments, documentation.
+  The default holds whatever language the user writes in and whatever
+  language existing content uses; change it only when the user asks,
+  and only for the kinds of text they name. Do not fix a conversation
+  language: write that agents reply in the language the user writes in.
 - **Toolchain: `mise.toml`** pins every runtime the project needs
   (`[tools]` section). Do not create `.nvmrc`, `.node-version`,
   `.tool-versions` or similar; if one exists, propose moving its version
