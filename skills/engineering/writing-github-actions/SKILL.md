@@ -1,6 +1,6 @@
 ---
 name: writing-github-actions
-description: Hardening and deploy rules for GitHub Actions workflows — least-privilege permissions, timeouts, checkout credentials, concurrency, test-gated deploys, environments, OIDC, and validation. Use whenever creating or editing any file under .github/workflows/, adding CI or a deploy workflow, making a deploy wait for tests, or moving deploy secrets.
+description: Hardening and deploy rules for GitHub Actions workflows — least-privilege permissions, timeouts, checkout credentials, concurrency, workflow lockfiles (actions.lock), test-gated deploys, environments, OIDC, and validation. Use whenever creating or editing any file under .github/workflows/, adding CI or a deploy workflow, making a deploy wait for tests, or moving deploy secrets.
 license: MIT
 ---
 
@@ -27,9 +27,29 @@ workflow is where it is most often skipped.
   (superseded PR runs are cancelled; default-branch runs always finish);
   deploy workflows a fixed group with `cancel-in-progress: false` (queue,
   never abort a deploy).
+- `pull_request_target`: GitHub blocks this trigger by default in public
+  repositories. When a workflow really needs it (labelling or commenting
+  on fork pull requests), never check out or run pull request code in
+  it, and state in the report that the workflow will not run until a
+  repository admin allows it in an Actions event policy.
 
 Workflow files you did not need to touch: do not edit them. Run the
 validation below on them too and list their findings in your report.
+
+## Repositories with a workflow lockfile
+
+When `.github/workflows/actions.lock` exists, `gh actions-lock` owns the
+commit pins: write `uses:` with a version tag, rerun `gh actions-lock`
+after adding a workflow or changing any `uses:`, and include the
+regenerated lockfile in the change. The validator below reads the
+lockfile, so a locked tag reference is not a finding — do not add
+`# zizmor: ignore[unpinned-uses]` or hand-written SHAs to get it to pass.
+
+A local action (`uses: ./...`) that itself uses remote actions cannot be
+locked. Run `gh actions-lock --migrate-local-actions`, which rewrites
+the reference to the self-repository form `uses: $/...`, and keep that
+form — the validator's lockfile check fails while such an action is
+still referenced as `./...`.
 
 ## Deploys
 
@@ -99,9 +119,10 @@ reports, and rerun until it passes:
 It runs actionlint, zizmor (template injection, excessive permissions,
 dangerous triggers, `secrets: inherit`, cache poisoning, and more) and
 `check-workflows.sh` (timeouts and concurrency, which the other two do
-not check). Missing tools are fetched for the run through `mise` or
-`uvx`; if the script cannot fetch them, report that validation did not
-run — never replace it with a plain YAML parse.
+not check), plus `gh actions-lock --verify` when the repository has a
+workflow lockfile. Missing tools are fetched for the run through `mise`
+or `uvx`; if the script cannot fetch them, report that validation did
+not run — never replace it with a plain YAML parse.
 
 When a zizmor finding is a deliberate choice, suppress that one line
 with `# zizmor: ignore[<rule>]` and state the reason in the report.
