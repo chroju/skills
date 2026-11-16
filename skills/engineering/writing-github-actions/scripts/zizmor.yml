@@ -1,6 +1,7 @@
 # zizmor settings used by validate.sh.
 rules:
-  # zizmor suggests the `$/...` self-repository syntax for local reusable
-  # workflows, but actionlint rejects it; keep the `./...` form.
+  # zizmor asks for the `$/...` self-repository syntax on every local
+  # reference. validate.sh accepts both `./...` and `$/...`, so existing
+  # `./...` references are not findings.
   self-repository:
     disable: true

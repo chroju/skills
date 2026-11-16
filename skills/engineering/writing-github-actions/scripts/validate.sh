@@ -2,12 +2,17 @@
 # Runs actionlint, zizmor, and check-workflows.sh on the given workflow
 # files. Tools that are not installed are fetched for this run only, at the
 # pinned versions below (both released well past a 7-day cooldown).
+# Where a workflow lockfile (.github/workflows/actions.lock) sits next to
+# the given workflows, also runs `gh actions-lock --verify` on that
+# repository.
 # Usage: validate.sh <file>...   (workflow files and .github/dependabot.yml)
 # Exit status: 0 when every check passes, 1 otherwise, 2 on setup errors.
 set -uo pipefail
 
 ACTIONLINT_VERSION=1.7.12
-ZIZMOR_VERSION=1.30.1
+# 1.32.0 is the first zizmor that reads the workflow lockfile; older
+# versions report every locked tag reference as unpinned.
+ZIZMOR_VERSION=1.32.0
 
 if [ "$#" -eq 0 ]; then
   echo "usage: $0 <workflow.yaml>..." >&2
@@ -54,10 +59,31 @@ for f in "$@"; do
   esac
 done
 
+# Repositories (one per line) whose workflows are covered by a lockfile.
+lock_roots=
+for f in ${workflows[@]+"${workflows[@]}"}; do
+  dir=$(cd "$(dirname "$f")" && pwd) || continue
+  [ -f "$dir/actions.lock" ] || continue
+  root=$(cd "$dir/../.." && pwd)
+  case "$lock_roots" in
+    *"$root"$'\n'*) ;;
+    *) lock_roots+="$root"$'\n' ;;
+  esac
+done
+if [ -n "$lock_roots" ] && ! gh actions-lock --help >/dev/null 2>&1; then
+  echo "error: .github/workflows/actions.lock found but the gh actions-lock extension is not installed; run: gh extension install github/gh-actions-lock" >&2
+  exit 2
+fi
+
 status=0
 if [ "${#workflows[@]}" -gt 0 ]; then
   echo "== actionlint"
-  "${ACTIONLINT[@]}" "${workflows[@]}" || status=1
+  # actionlint does not know the `$/...` self-repository syntax yet; the
+  # two ignores drop only its format errors for such references.
+  "${ACTIONLINT[@]}" \
+    -ignore '^reusable workflow call "\$/' \
+    -ignore '^specifying action "\$/' \
+    "${workflows[@]}" || status=1
 fi
 echo "== zizmor"
 "${ZIZMOR[@]}" --config "$here/zizmor.yml" "$@" || status=1
@@ -65,5 +91,10 @@ if [ "${#workflows[@]}" -gt 0 ]; then
   echo "== check-workflows"
   "$here/check-workflows.sh" "${workflows[@]}" || status=1
 fi
+while IFS= read -r root; do
+  [ -n "$root" ] || continue
+  echo "== gh actions-lock --verify ($root)"
+  (cd "$root" && gh actions-lock --verify) || status=1
+done <<<"$lock_roots"
 
 exit "$status"
